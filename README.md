@@ -44,36 +44,37 @@ Built as a time-boxed academic project (16-week plan, live demo/viva). That fram
 
 ```mermaid
 flowchart TB
-    subgraph Clients
+    subgraph clients [Clients]
         Dashboard["Next.js Dashboard"]
-        DemoAgent["Demo Agent (LLM function-calling)"]
+        DemoAgent["Demo Agent"]
     end
 
-    subgraph Backend["Express API Server (single process)"]
+    subgraph backend [Express API Server]
         Interceptor["Interceptor / Entry Point"]
-        RiskScoring["Risk Scoring (rule + classifier)"]
+        RiskScoring["Risk Scoring"]
         PolicyClient["OPA Policy Client"]
     end
 
-    OPA[("OPA — Rego Policies")]
-    DB[("Supabase / Postgres\n(operational tables + audit_log)")]
-    LLM[("LLM API — OpenAI or Gemini")]
+    OPA[("OPA - Rego Policies")]
+    DB[("Supabase / Postgres")]
+    LLM[("LLM API")]
 
-    DemoAgent -- "POST /api/tool-call" --> Interceptor
+    DemoAgent -->|POST tool-call| Interceptor
     Interceptor --> RiskScoring
     RiskScoring --> PolicyClient
-    PolicyClient <--> OPA
+    PolicyClient --> OPA
+    OPA --> PolicyClient
     PolicyClient --> Interceptor
-    Interceptor -- "allow / block / pending" --> DemoAgent
+    Interceptor -->|decision| DemoAgent
 
-    Interceptor -- "writes: tool_calls, audit_log" --> DB
-    RiskScoring -- "writes: risk_scores" --> DB
-    PolicyClient -- "writes: policy_decisions" --> DB
+    Interceptor --> DB
+    RiskScoring --> DB
+    PolicyClient --> DB
 
-    Dashboard -- "REST: actions, verify, trigger" --> Backend
-    Dashboard -- "realtime subscription" --> DB
+    Dashboard -->|REST API| Interceptor
+    Dashboard -->|realtime| DB
 
-    DemoAgent -- "function-calling" --> LLM
+    DemoAgent --> LLM
 ```
 
 **Design principles:**
