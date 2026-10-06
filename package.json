@@ -1,0 +1,62 @@
+{
+  "name": "agentguard",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Policy-enforcement gateway for AI agent tool calls: intercept -> score -> OPA decide -> human approval -> hash-chained audit log -> live dashboard.",
+  "engines": {
+    "node": ">=20.11"
+  },
+  "workspaces": [
+    "apps/api",
+    "apps/dashboard",
+    "apps/demo-agent"
+  ],
+  "scripts": {
+    "setup": "node scripts/setup.mjs",
+    "db:start": "node scripts/db-start.mjs",
+    "db:migrate": "npm run migrate -w @agentguard/api",
+    "db:seed": "npm run seed -w @agentguard/api",
+    "db:reset": "npm run reset -w @agentguard/api --",
+    "opa:install": "node scripts/install-opa.mjs",
+    "opa:start": "node scripts/opa-start.mjs",
+    "opa:test": "node scripts/opa-test.mjs",
+    "ml:setup": "node scripts/ml.mjs setup",
+    "ml:train": "node scripts/ml.mjs train",
+    "dev:api": "npm run dev -w @agentguard/api",
+    "dev:dashboard": "npm run dev -w @agentguard/dashboard",
+    "start:api": "npm run start -w @agentguard/api",
+    "start:dashboard": "npm run start -w @agentguard/dashboard",
+    "agent": "npm run start -w @agentguard/demo-agent --",
+    "audit:verify": "npm run audit:verify -w @agentguard/api",
+    "demo:tamper": "npm run tamper -w @agentguard/api --",
+    "demo:burst": "node scripts/burst.mjs",
+    "typecheck": "npm run typecheck --workspaces",
+    "lint": "eslint .",
+    "build": "npm run build --workspaces",
+    "test": "npm run test:unit",
+    "test:unit": "npm run test:unit -w @agentguard/api && npm run test -w @agentguard/demo-agent",
+    "test:integration": "npm run test:integration -w @agentguard/api",
+    "test:e2e": "node scripts/e2e.mjs",
+    "health": "node scripts/health.mjs",
+    "verify": "node scripts/verify.mjs"
+  },
+  "devDependencies": {
+    "@eslint/js": "^10.0.1",
+    "@playwright/test": "^1.63.0",
+    "embedded-postgres": "17.10.0-beta.17",
+    "pg": "^8.23.1",
+    "eslint": "^10.12.0",
+    "eslint-plugin-react-hooks": "^7.1.1",
+    "globals": "^17.13.0",
+    "typescript": "~6.0.3",
+    "typescript-eslint": "^8.71.1"
+  },
+  "allowScripts": {
+    "esbuild@0.28.2": true,
+    "@embedded-postgres/windows-x64@17.10.0-beta.17": true,
+    "@embedded-postgres/linux-x64@17.10.0-beta.17": true,
+    "@embedded-postgres/linux-arm64@17.10.0-beta.17": true,
+    "@embedded-postgres/darwin-arm64@17.10.0-beta.17": true,
+    "@embedded-postgres/darwin-x64@17.10.0-beta.17": true
+  }
+}

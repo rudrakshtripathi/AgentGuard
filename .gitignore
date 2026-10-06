@@ -1,0 +1,22 @@
+node_modules/
+dist/
+.next/
+next-env.d.ts
+*.tsbuildinfo
+
+# local secrets & data
+.env
+.env.local
+.data/
+tools/bin/
+
+# python
+ml/.venv/
+__pycache__/
+
+# test output
+test-results/
+playwright-report/
+e2e/.auth/
+coverage/
+.next-e2e/

@@ -1,372 +1,245 @@
 # AgentGuard
 
-A policy-enforcement gateway that sits between an AI agent's decision to call a tool and the tool actually running. Every proposed action is intercepted, scored for risk, checked against policy, and allowed, blocked, or sent to a human for approval — with every decision written to a tamper-evident log and shown live on a dashboard.
+A policy-enforcement gateway that sits between an AI agent's decision to call a tool and the tool actually running. Every proposed call is **intercepted**, **scored** for risk (rule checklist + a small prompt-injection classifier), **decided by OPA** (allow / block / human approval), **executed only if permitted** (sandboxed mock tools), and **written to a hash-chained, tamper-evident audit log** — all visible live on a dashboard.
 
-Built as a time-boxed academic project (16-week plan, live demo/viva). That framing matters throughout this README — several design choices exist to make the project defensible and demoable, not production-ready. Where that's true, it's stated directly rather than glossed over.
-
----
-
-## Table of Contents
-
-- [What it does](#what-it-does)
-- [Architecture](#architecture)
-- [Tech stack](#tech-stack)
-- [Repository structure](#repository-structure)
-- [Database schema](#database-schema)
-- [API reference](#api-reference)
-- [Pages / routes](#pages--routes)
-- [Getting started](#getting-started)
-- [Environment variables](#environment-variables)
-- [Demo mode](#demo-mode)
-- [Testing](#testing)
-- [Known limitations](#known-limitations)
-- [Project phases](#project-phases)
-- [Open questions](#open-questions)
-- [Report / documentation structure](#report--documentation-structure)
-
----
-
-## What it does
-
-1. An agent (or a canned demo scenario) proposes a tool call — send email, delete a file, run a DB query, hit a payment API.
-2. AgentGuard intercepts the call before anything real happens.
-3. A risk score is computed: a rule-based checklist (destructive actions, sensitive targets, odd timing/frequency score higher) combined with a small trained prompt-injection classifier (TF-IDF + logistic regression).
-4. OPA (Open Policy Agent), running Rego policies, takes the score plus metadata and returns one of three decisions: **allow**, **block**, or **approve** (send to a human).
-5. If `approve`, the pipeline pauses (via polling with a timeout-to-deny) until an admin resolves it from the dashboard.
-6. Every event — regardless of outcome, including rejected/malformed requests — is written to a hash-chained audit log. A verifier can walk the chain and flag any row that's been altered.
-7. A Next.js dashboard shows all of this live: activity feed, pending approvals, call detail with score breakdown, and an audit log with a one-click integrity check.
-
-**Core loop:** `intercept → score → policy decision → (optional human approval) → tamper-evident log → live dashboard`
-
----
-
-## Architecture
-
-```mermaid
-flowchart TB
-    subgraph clients [Clients]
-        Dashboard["Next.js Dashboard"]
-        DemoAgent["Demo Agent"]
-    end
-
-    subgraph backend [Express API Server]
-        Interceptor["Interceptor / Entry Point"]
-        RiskScoring["Risk Scoring"]
-        PolicyClient["OPA Policy Client"]
-    end
-
-    OPA[("OPA - Rego Policies")]
-    DB[("Supabase / Postgres")]
-    LLM[("LLM API")]
-
-    DemoAgent -->|POST tool-call| Interceptor
-    Interceptor --> RiskScoring
-    RiskScoring --> PolicyClient
-    PolicyClient --> OPA
-    OPA --> PolicyClient
-    PolicyClient --> Interceptor
-    Interceptor -->|decision| DemoAgent
-
-    Interceptor --> DB
-    RiskScoring --> DB
-    PolicyClient --> DB
-
-    Dashboard -->|REST API| Interceptor
-    Dashboard -->|realtime| DB
-
-    DemoAgent --> LLM
-```
-
-**Design principles:**
-- **One decision authority.** OPA is the single place a final allow/block/approve decision is made. The risk score is an *input* to policy, not a competing decision-maker — scoring math lives in the Risk Scoring module, never in Rego.
-- **One process boundary.** The backend is a single Express process with three in-process modules (Interceptor, Risk Scoring, Policy Client) — not separate microservices. There's no scale justification for splitting them at this project's size (20–30 call bursts).
-- **No infrastructure the scope doesn't need.** No Kafka, no message queue, no caching layer. Adding any of these would be complexity the requirements never asked for.
-- **Two trust boundaries into the data, by design (and flagged as a risk).** The dashboard reads live state two ways: REST calls to the backend for actions (approve/reject, verify, trigger), and a **direct Supabase realtime subscription** for live table updates, bypassing the backend entirely. This is an intentional shortcut for demo speed, not an oversight — but it means authorization isn't uniformly enforced through one layer. See [Known limitations](#known-limitations).
-
----
-
-## Tech stack
-
-| Layer | Technology | Why |
-|---|---|---|
-| Frontend | Next.js + Tailwind CSS | Fast to build a small multi-page dashboard; clean Supabase client integration |
-| Backend | Express (Node.js) | Minimal, sufficient for a single-process API at this scale |
-| Database | Supabase (Postgres) | Managed Postgres + built-in realtime + basic auth primitives in one free-tier service |
-| Policy engine | OPA / Rego | Real, industry-used policy tool — not an ad hoc if/else rules engine |
-| Demo agent | OpenAI **or** Gemini function-calling (pick one) | Either is sufficient; maintaining both integration paths has no product benefit |
-| Language | TypeScript (recommended) | Not mandated by the source spec, but recommended for anything beyond a solo throwaway script |
-
----
-
-## Repository structure
+This is a time-boxed academic / demo build (single process, single database, no queues). Its limits are stated plainly in [Known limitations](#known-limitations).
 
 ```
-agentguard/
-├── apps/
-│   ├── dashboard/              # Next.js app
-│   │   ├── app/
-│   │   │   ├── login/
-│   │   │   ├── (dashboard)/
-│   │   │   │   ├── page.tsx            # / — Overview
-│   │   │   │   ├── activity/
-│   │   │   │   ├── approvals/
-│   │   │   │   ├── calls/[id]/
-│   │   │   │   ├── audit-log/
-│   │   │   │   └── demo/
-│   │   ├── components/
-│   │   │   ├── StatusBadge.tsx
-│   │   │   ├── RiskMeter.tsx
-│   │   │   ├── ApprovalCard.tsx
-│   │   │   ├── LogTable.tsx
-│   │   │   ├── IntegrityCheckButton.tsx
-│   │   │   ├── ScenarioTriggerButton.tsx
-│   │   │   └── LiveFeedRow.tsx
-│   │   └── lib/                # Supabase client, REST client
-│   │
-│   └── api/                    # Express backend
-│       ├── src/
-│       │   ├── interceptor/    # POST /api/tool-call entry point
-│       │   ├── scoring/        # rule-based scorer + injection classifier
-│       │   ├── policy/         # OPA client
-│       │   ├── approvals/      # approval CRUD + timeout poller
-│       │   ├── audit/          # hash-chain writer + verifier
-│       │   ├── auth/           # admin session + agent API key middleware
-│       │   └── routes/
-│       └── policies/           # Rego policy files, loaded by OPA
-│
-├── demo-agent/                 # standalone LLM function-calling client + 3–4 mocked tools
-├── db/
-│   ├── migrations/             # numbered, forward-only SQL migrations
-│   └── seed/                   # seed script (agents, admins, historical calls, valid hash chain)
-├── docs/                       # PRD, TRD, DB schema spec, UI/UX spec, web app flow, this plan
-└── README.md
+Demo agent ──POST /api/tool-call──► Interceptor ─► Risk scoring ─► OPA (Rego) ─┬─ allow   ─► mock tool runs
+                                         │              │              │        ├─ block   ─► never runs
+                                         ▼              ▼              ▼        └─ approve ─► pending ─► human on /approvals
+                                   ┌───────────── PostgreSQL (Supabase-compatible) ──────────────┐           │ approve → runs
+                                   │ tool_calls · risk_scores · policy_decisions · approvals      │           │ reject / timeout → never runs
+                                   │ audit_log (append-only, SHA-256 hash chain)                   │◄──────────┘
+                                   └──────────── NOTIFY ─► API ─► SSE ─► Next.js dashboard ───────┘
 ```
 
-Adjust to taste — the point is the module boundaries above (interceptor / scoring / policy / approvals / audit / auth), not the exact folder names.
+## Contents
+- [Stack](#stack) · [Repository layout](#repository-layout)
+- [Setup](#setup) (prerequisites → running)
+- [Tests and verification](#tests-and-verification)
+- [Demo procedure](#demo-procedure)
+- [How it works](#how-it-works) · [API](#api) · [Environment variables](#environment-variables)
+- [Troubleshooting](#troubleshooting) · [Known limitations](#known-limitations)
+- Status documents: [`AGENTGUARD_IMPLEMENTATION_STATUS.md`](AGENTGUARD_IMPLEMENTATION_STATUS.md), [`AGENTGUARD_ACCEPTANCE_TEST.md`](AGENTGUARD_ACCEPTANCE_TEST.md), [`AGENTGUARD_FINAL_VERIFICATION.md`](AGENTGUARD_FINAL_VERIFICATION.md)
 
----
+## Stack
 
-## Database schema
-
-Eight tables. `admins` and `admin_sessions` aren't in the original architecture sketch — they were added because the admin login requirement (`/login`) can't be implemented against nothing.
-
-| Table | Purpose | Key relationships |
-|---|---|---|
-| `agents` | Identity for API callers (hashed API key) | 1 agent → many `tool_calls` |
-| `admins` | Dashboard operator credentials | 1 admin → many `admin_sessions`, many `approvals` (as reviewer) |
-| `admin_sessions` | Issued login sessions (so they can expire/be revoked) | many → 1 `admins` |
-| `tool_calls` | One row per proposed action — the hub table | 1 → 0..1 each of `risk_scores`, `policy_decisions`, `approvals` |
-| `risk_scores` | `rule_score`, `injection_score` (nullable), `final_score` | 1:1 with `tool_calls` |
-| `policy_decisions` | OPA's decision + which policy fired | 1:1 with `tool_calls` |
-| `approvals` | Human review record; `pending → approved / rejected / timeout_denied`, one-way transition | 0:1 with `tool_calls` |
-| `audit_log` | Append-only, hash-chained event stream | Deliberately **not** foreign-keyed to `tool_calls` — integrity comes from hashing, not relational structure |
-
-**Write rules:**
-- `tool_calls`, `risk_scores`, `policy_decisions` are write-once — never updated after creation.
-- `approvals` is the one table with a real update path (`status`, `reviewer_id`, `resolved_at`).
-- `audit_log` is never updated or deleted, by anyone, ever. This should be enforced at the **database level** (`REVOKE UPDATE, DELETE`), not just by omitting the code path — an app-layer-only guarantee can be broken by a bug, not just an attacker.
-
-Full column definitions, indexes, and RLS discussion live in `docs/AgentGuard_Backend_DB_Schema.md`.
-
----
-
-## API reference
-
-All endpoints are JSON in/out. Agent endpoints use a hashed API key; everything else requires an admin session.
-
-| Method & Path | Auth | Purpose |
-|---|---|---|
-| `POST /api/tool-call` | Agent key | Submit a proposed action → returns `{ decision, call_id, reason }` |
-| `GET /api/tool-calls` | Admin | List calls, filterable by status/date |
-| `GET /api/tool-calls/:id` | Admin | Full detail: payload, score breakdown, policy reasoning |
-| `GET /api/approvals/pending` | Admin | List items awaiting human decision |
-| `POST /api/approvals/:id/decide` | Admin | Body: `{ decision: "approve" \| "reject" }` |
-| `GET /api/audit-log` | Admin | Paginated log entries |
-| `GET /api/audit-log/verify` | Admin | Runs the hash-chain check → `{ valid, broken_row_id? }` |
-| `GET /api/stats` | Admin | Counts for the overview page |
-| `POST /api/demo/trigger/:scenario` | Admin | Fires a canned scenario end-to-end through the real pipeline |
-| `POST /api/auth/login` | Public | `{ username, password }` → session |
-| `POST /api/auth/logout` | Admin | Ends the session |
-
-`/api/auth/login` and `/api/auth/logout` aren't in the original endpoint sketch but are required to actually implement the login gate — added as a technical necessity, not a scope change.
-
-Every request through the interceptor — including malformed or rejected ones — produces at least one audit log write.
-
----
-
-## Pages / routes
-
-| Route | Purpose |
+| Layer | Technology |
 |---|---|
-| `/login` | Admin login (single hardcoded demo credential — see [Known limitations](#known-limitations)) |
-| `/` | Overview — summary cards (total / allowed / blocked / pending) + calls-over-time chart |
-| `/activity` | Live feed of tool calls with status badges |
-| `/approvals` | Pending approval queue with Approve/Reject buttons |
-| `/calls/[id]` | Detail view: raw payload, rule vs. injection score breakdown, which policy fired and why |
-| `/audit-log` | Searchable/filterable log table + "Verify integrity" button |
-| `/demo` | Control panel to fire canned demo scenarios |
+| Dashboard | Next.js 16 (App Router) · React 19 · TypeScript · Tailwind CSS 4 |
+| API | Node.js · Express 5 · TypeScript (strict) — one process |
+| Database | PostgreSQL 17 (local via `embedded-postgres`, or Supabase / any Postgres ≥ 13) |
+| Policy | Open Policy Agent 1.21 · Rego v1 |
+| Classifier | scikit-learn TF-IDF + LogisticRegression (Python, training only) → JSON → inference in TypeScript |
+| Demo agent | OpenAI function calling (`openai` SDK) — the single LLM provider |
+| Tests | Vitest · Supertest · Playwright · `opa test` |
 
-Desktop-only. No signup, onboarding, notifications, or account management exist in this product — that's a deliberate scope decision, not a gap to fill in later.
+## Repository layout
 
----
+```
+apps/api/            Express gateway
+  src/interceptor/   pipeline: intercept → score → OPA → act → audit
+  src/scoring/       rule scorer, injection classifier inference, score combination
+  src/policy/        OPA client (fail-closed)
+  src/approvals/     approval resolution, timeout sweeper, blocking waiter
+  src/audit/         hash chain, append-only writer, verifier
+  src/auth/          agent API keys, admin sessions, CSRF
+  src/tools/         sandboxed mock tools
+  src/demo/          canned scenarios
+  src/realtime/      Postgres LISTEN → Server-Sent Events
+  src/devtools/      seed + controlled tamper tool (never imported by the server)
+  models/            trained classifier (committed) + sklearn parity samples
+  test/unit, test/integration
+apps/dashboard/      Next.js dashboard (7 screens, components named per the UI spec)
+apps/demo-agent/     OpenAI function-calling agent that routes every tool call through AgentGuard
+policies/            agentguard.rego + agentguard_test.rego
+db/migrations/       forward-only SQL migrations
+ml/                  dataset generator, hand-written challenge set, training script
+e2e/                 Playwright demo-flow suite
+scripts/             setup, db-start, opa install/start/test, health, verify, burst, e2e
+```
 
-## Getting started
+## Setup
 
-> Adjust commands to your actual package manager / monorepo tooling once the repo is scaffolded — these assume the structure above.
+### 1. Prerequisites
+
+| Tool | Version | Needed for |
+|---|---|---|
+| Node.js | **≥ 20.11** (developed on 24.19) | everything |
+| npm | ≥ 10 (developed on 11.17) | package manager (npm workspaces) |
+| Python | 3.10+ (developed on 3.12) | **only** to retrain the classifier — the trained model is committed |
+| PostgreSQL | none to install — `npm run db:start` runs a real Postgres 17 locally. Or use Supabase / your own Postgres. | |
+| OPA | none to install — `npm run setup` downloads the official binary (SHA-256 verified) into `tools/bin/` | |
+
+Windows note: run as a normal (non-administrator) user — PostgreSQL refuses to start as an administrator.
+
+### 2. Install and configure
 
 ```bash
-# 1. Clone and install
-git clone <repo-url>
-cd agentguard
 npm install
-
-# 2. Set up environment variables (see below)
-cp .env.example .env
-
-# 3. Run database migrations
-npm run db:migrate
-
-# 4. Seed demo data (agents, admins, historical calls, a valid hash chain)
-npm run db:seed
-
-# 5. Start OPA with the bundled policies
-opa run --server ./apps/api/policies
-
-# 6. Start the backend
-npm run dev:api
-
-# 7. Start the dashboard
-npm run dev:dashboard
-
-# 8. (Optional) Run the demo agent against a real LLM
-npm run dev:agent
+npm run setup        # creates .env with generated secrets, downloads OPA, installs Playwright Chromium
 ```
 
-Log in to the dashboard at `http://localhost:3000/login`.
+`npm run setup` prints the generated dashboard password once; it is stored in `.env` (`ADMIN_PASSWORD`). It never overwrites an existing `.env`. To configure by hand instead: `cp .env.example .env` and replace every `CHANGE_ME` value.
 
----
+> npm ≥ 11 blocks dependency install scripts unless approved. The two this project needs (`esbuild`, used by `tsx`, and the `@embedded-postgres/<platform>` binary) are pre-approved in `package.json` → `allowScripts`. If `npm install` warns about them anyway, run `npm approve-scripts esbuild @embedded-postgres/<your-platform>`.
+
+### 3. Database
+
+Local (recommended for development) — leave this running in its own terminal:
+
+```bash
+npm run db:start     # Postgres 17 on 127.0.0.1:54329, data in .data/postgres; creates agentguard, agentguard_test, agentguard_e2e
+```
+
+Then, in another terminal:
+
+```bash
+npm run db:migrate   # applies db/migrations and provisions the least-privilege app role from DATABASE_URL
+```
+
+**Supabase instead:** set `DATABASE_ADMIN_URL` to the `postgres` connection string and `DATABASE_URL` to the same host with a new role name/password of your choice (e.g. `agentguard_app`), both using the **session-mode** pooler (port 5432) — live updates need `LISTEN`, which the transaction pooler (6543) does not support. `npm run db:migrate` creates that role. Integration tests and E2E need two extra empty databases (`agentguard_test`, `agentguard_e2e`) or the `TEST_DATABASE_*` / `E2E_DATABASE_*` overrides.
+
+### 4. OPA (own terminal)
+
+```bash
+npm run opa:start    # opa run --server on 127.0.0.1:8181 loading ./policies (watching for edits)
+npm run opa:test     # opa check --strict + opa test policies -v
+```
+
+### 5. Classifier (optional — model is committed)
+
+```bash
+npm run ml:setup     # creates ml/.venv and installs scikit-learn
+npm run ml:train     # regenerates ml/data/injection_dataset.csv, trains, exports apps/api/models/injection-model.json
+```
+
+### 6. Seed demo data (OPA must be running)
+
+```bash
+npm run db:seed               # admin + agents; 54 historical calls through the REAL pipeline (only if the DB is empty)
+npm run db:reset -- --yes     # drop everything, re-migrate, re-seed (fresh demo dataset)
+```
+
+### 7. Run (each in its own terminal)
+
+```bash
+npm run dev:api          # http://127.0.0.1:4000   (production: npm run build && npm run start:api)
+npm run dev:dashboard    # http://localhost:3000   (production: npm run build && npm run start:dashboard)
+npm run health           # env, model, database, OPA, API, dashboard — all should PASS
+```
+
+Log in at http://localhost:3000/login with `ADMIN_USERNAME` / `ADMIN_PASSWORD` from `.env`.
+
+## Tests and verification
+
+| Command | What it runs | Needs |
+|---|---|---|
+| `npm run test:unit` | API unit tests (scoring, hash chain, classifier ↔ sklearn parity, OPA client fail-closed, validation, mock tools) + demo-agent tests | nothing |
+| `npm run opa:test` | Rego unit tests with OPA's native test runner | OPA binary |
+| `npm run test:integration` | Real pipeline, API contract, security, audit tamper, realtime, 25-call burst — against `agentguard_test` | Postgres + OPA running |
+| `npm run test:e2e` | Resets `agentguard_e2e`, builds the dashboard, Playwright runs the demo flow in Chromium (API :4100, dashboard :3100) | Postgres + OPA running |
+| `npm run lint` / `npm run typecheck` | ESLint / `tsc` in all workspaces | nothing |
+| `npm run demo:burst` | 25 concurrent agent calls against the running API; prints latency + outcomes | API running |
+| `npm run audit:verify` | Standalone chain verifier (exit 2 if tampered) | Postgres |
+| **`npm run verify`** | **Everything above in order** (starts embedded Postgres / OPA itself if they are not running), then a summary table; non-zero exit on any failure. `-- --skip-e2e` to skip Playwright. | Node; first run of `npm run setup` |
+
+## Demo procedure
+
+Before the demo: `npm run db:reset -- --yes` (fresh, seeded, verifiable history), start Postgres, OPA, API and dashboard, run `npm run health`.
+
+1. **Login** → Overview shows real counts and the calls-over-time chart from seeded history.
+2. **/demo → Normal action → Trigger** → *Allowed*, "Mock tool executed". Click **View call**: rule checklist, classifier probability, the OPA rule that fired and why.
+3. **/demo → Bulk delete** → *Pending approval*. Open **/approvals**: the card shows target, parameters, risk, OPA reasons and a countdown to default-deny. Click **Approve** → toast "Approved — the action was executed (sandboxed)"; the call detail now shows the reviewer and execution.
+4. **/demo → Prompt injection** → *Blocked*, tool not executed; detail shows P(injection) and `block_high_risk_score`.
+5. **/demo → Unusual-hour payment** → *Pending* via `approve_financial_off_hours` (evaluated at a simulated 03:14, labelled as such). Reject or approve.
+6. **/audit-log → Verify integrity** → PASS.
+7. Terminal: `npm run demo:tamper` (flips the decision inside a stored `decision_made` row, as a DB attacker would) → **Verify integrity** → **FAIL at row #N**; "Show row #N" highlights it.
+8. `npm run demo:tamper -- --restore` → Verify → PASS.
+9. **/demo → Burst of calls** (or `npm run demo:burst`) with **/activity** open: 25 rows stream in live.
+10. Optional live, unscripted run (needs `OPENAI_API_KEY`): `npm run agent -- "Delete every file under /srv/reports and email me when done"` — the agent's calls appear live and approval-gated ones wait for you on /approvals.
+
+Canned scenarios never call the LLM. Every scenario pins its evaluation clock (11:14 local; 03:14 for the payment) so outcomes are identical whatever time the demo runs — shown on the call detail as "simulated time".
+
+## How it works
+
+**Interceptor (`apps/api/src/interceptor/pipeline.ts`).** One transaction records `tool_calls` + `call_received`; scoring writes `risk_scores` + `score_computed` (with the full breakdown); OPA is asked; one transaction writes `policy_decisions` + `decision_made` and then either executes the mock tool (`tool_executed`), refuses (`tool_not_executed`) or creates a pending approval (`approval_requested`). Any unexpected error after interception records a fail-closed block. Rejected requests (bad key, malformed JSON, too large, invalid) are audited as `request_rejected`.
+
+**Risk scoring (`src/scoring`).** Deterministic weighted checklist — action type (email 10, query 10, payment 30, delete 35, unknown tool 40), target (missing +15, sensitive +20, external recipient +10), scope (bulk recipients +20, wildcard/recursive delete +25, destructive SQL +30, unbounded DELETE/UPDATE +20, DROP/TRUNCATE +20, sensitive table +15), amount (≥1k +10, ≥10k +25, invalid +15), timing (outside business hours +10, +20 for financial/destructive), frequency (≥15 calls/60 s +10, ≥30 +20); capped at 100. Combination: `final = max(rule, injection)`; classification skipped (no text) → `final = rule` with `injection_score` NULL; classifier unavailable → `final = max(rule, 50)`.
+
+**Classifier (`ml/`).** 807 labelled examples built from hand-written seeds + deterministic templates; TF-IDF word 1–2 grams + logistic regression (C=10, balanced). Held-out templated test split: 99.4 % accuracy (optimistic — templates). **Hand-written challenge set (30, never trained on): 90 %.** Exported to JSON; the TypeScript inference matches sklearn to 1e-9 (tested).
+
+**Policy (`policies/agentguard.rego`).** Bands from the spec: final < 30 allow · 30–70 approve · ≥ 70 block; plus block on injection score ≥ 80 or a duplicate of a pending call; approve for destructive actions, off-hours payments, unknown tools, degraded scoring; default deny. Express **fails closed** (block, `fail_closed_*`) if OPA is unreachable, times out, or answers malformed.
+
+**Approvals.** `POST /api/approvals/:id/decide` is a single conditional `UPDATE … WHERE status='pending'` inside the transaction that also audits and runs/refuses the tool — exactly one concurrent resolver wins, others get 409. A sweeper denies anything older than `APPROVAL_TIMEOUT_SECONDS` (`timeout_denied`) using the DB clock, so restarts neither lose nor double-deny items. With `"wait_for_approval": true` the agent's request blocks (polling the table) until resolution.
+
+**Audit log.** `hash = SHA-256(canonical_json({seq, event_type, payload, created_at, prev_hash}))`, genesis `prev_hash` NULL (hashed as 64 zeros). Appends are serialised by a transaction-scoped advisory lock. Append-only is enforced three ways: no code path, no UPDATE/DELETE/TRUNCATE grant for the app role, and a trigger that rejects UPDATE/DELETE for every role. The verifier detects modified payload/hash/prev_hash, deleted rows (seq gaps) and broken links, and reports the first broken row.
+
+**Live updates.** Triggers `NOTIFY` on inserts/updates; the API `LISTEN`s and relays to authenticated sessions via SSE (`/api/events`). If that channel is unavailable the dashboard shows "Live channel lost — polling every 2.5s" and polls.
+
+## API
+
+All JSON; errors are `{"error":{"code","message","details?"}}`. Agent endpoint: `Authorization: Bearer <agent key>`. Admin endpoints: `ag_session` cookie (HttpOnly, SameSite=Strict) and, for POST, header `x-agentguard-csrf: 1`.
+
+| Method & path | Auth | Purpose |
+|---|---|---|
+| `POST /api/tool-call` | agent | `{tool_name, params, requested_at?, wait_for_approval?}` → 200 allow/block or 202 pending: `{call_id, decision, policy_decision, policy_name, reason, reasons, risk, approval, execution}` |
+| `GET /api/tool-calls` | admin | `?status=&date_from=&date_to=&page=&page_size=` |
+| `GET /api/tool-calls/:id` | admin | full trail: params, scores + breakdown, OPA decision + reasons, approval, execution, audit rows |
+| `GET /api/approvals/pending` | admin | pending queue with context + expiry |
+| `POST /api/approvals/:id/decide` | admin | `{decision: "approve"\|"reject"}`; 409 if already resolved/expired |
+| `GET /api/audit-log` | admin | `?page=&page_size=&event_type=&call_id=&focus_seq=` |
+| `GET /api/audit-log/verify` | admin | `{valid, status, total_rows, verified_rows, broken_row_id, broken_seq, reason, message}`; 500 `VERIFY_FAILED_TO_RUN` if it could not run |
+| `GET /api/stats` | admin | `?range=24h\|7d` counts + time series |
+| `GET /api/demo/scenarios`, `POST /api/demo/trigger/:scenario` | admin | canned scenarios: `normal`, `bulk-delete`, `injection`, `unusual-hour-payment`, `burst` |
+| `POST /api/auth/login`, `POST /api/auth/logout`, `GET /api/auth/session` | public / admin | session lifecycle |
+| `GET /api/events` | admin | Server-Sent Events (503 → poll) |
+| `GET /health` | public | `{status, checks:{database, opa, classifier, realtime}}` |
 
 ## Environment variables
 
+See [`.env.example`](.env.example) — every variable is documented there and used by exactly that name.
+
 | Variable | Used by | Notes |
 |---|---|---|
-| `LLM_API_KEY` | demo-agent | OpenAI or Gemini key — server-side only, never exposed to the frontend |
-| `SUPABASE_URL` | api, dashboard | |
-| `SUPABASE_SERVICE_KEY` | api (backend) | Full access — backend only |
-| `SUPABASE_ANON_KEY` | dashboard (frontend) | Must be scoped tightly — this key is what the direct realtime subscription uses |
-| `ADMIN_PASSWORD` (or seeded `admins` row) | api | Never commit in plaintext |
-| `OPA_URL` | api | OPA is treated as an internal-only sidecar — never exposed on a public port |
-| `SESSION_SECRET` | api | Signs/verifies admin session tokens |
+| `DATABASE_URL` | API, tests | application role (least privilege) |
+| `DATABASE_ADMIN_URL` | migrate, seed, reset, tamper, tests | owner role — never used by the server |
+| `EMBEDDED_PG_PORT/USER/PASSWORD` | `db:start` | local Postgres only |
+| `ADMIN_USERNAME`, `ADMIN_PASSWORD` | seed | stored as bcrypt hash |
+| `DEMO_AGENT_API_KEY` | seed, demo agent, burst | stored as SHA-256 hash |
+| `OPA_URL`, `OPA_TIMEOUT_MS` | API | |
+| `API_HOST`, `API_PORT` | API | |
+| `API_URL` | dashboard (rewrites + login gate), agent tools | |
+| `SESSION_TTL_HOURS`, `COOKIE_SECURE` | API | sessions are random tokens stored hashed — no signing secret is needed |
+| `APPROVAL_TIMEOUT_SECONDS`, `APPROVAL_POLL_INTERVAL_MS` | API | |
+| `BUSINESS_HOURS_START/END`, `BUSINESS_TIMEZONE` | API | defines "unusual hour" |
+| `INTERNAL_EMAIL_DOMAINS`, `AGENT_RATE_LIMIT_PER_MINUTE`, `INJECTION_MODEL_PATH`, `LOG_LEVEL` | API | |
+| `OPENAI_API_KEY`, `OPENAI_MODEL`, `AGENTGUARD_URL` | demo agent | optional |
 
-None of these should be hardcoded in source. The one deliberately disclosed exception is a demo login credential — see below.
+## Troubleshooting
 
----
-
-## Demo mode
-
-Live, unscripted LLM calls during a graded demo are a liability — latency, API downtime, or unexpected model behavior can derail a five-minute slot. `/demo` exists to de-risk this:
-
-- **Canned scenarios** (`POST /api/demo/trigger/:scenario`) run pre-written, deterministic inputs through the **real** pipeline — real interceptor, real scoring, real OPA call, real audit log write. Only the input is scripted, not the system's behavior.
-- **Seed the database beforehand.** Don't open the demo on an empty dashboard — pre-load historical calls so charts and the activity feed look real immediately. The seed script must compute real hashes exactly as the application does; fake placeholder hashes will fail the very first "Verify integrity" click.
-- **Recommended demo order:** run the scripted scenarios first, then — only once those have already proven the system works — do one live, unscripted run (e.g., typing a custom prompt injection) for credibility.
-- **Keep a backup video** of a full successful run in case WiFi, the LLM API, or Supabase is down on the day.
-- **Rehearse on the actual presentation machine and network**, not just a dev laptop — this is called out explicitly because environment-specific failures are exactly what a dry run is supposed to catch before the graded run.
-
-**Scenarios to cover:**
-1. Normal action → allowed instantly.
-2. Bulk delete → routed to approval, approved live from the dashboard.
-3. Prompt injection attempt → blocked, visible in the log with reasoning.
-4. Unusual-hour payment call → routed to approval or blocked, per policy.
-5. Tamper test → edit a row directly in Postgres, run the verifier, show it catch the change.
-6. Burst of calls (20–30) → confirm the live feed keeps up without breaking.
-
----
-
-## Testing
-
-- **Unit:** rule-based scorer and score-combination logic — pure functions, clear expected outputs (bulk-delete should score visibly higher than a routine call).
-- **Integration:** full pipeline (Interceptor → Scoring → OPA → DB write) for each demo scenario.
-- **API:** happy-path + key failure-path (invalid auth, invalid body, not-found) per endpoint.
-- **E2E:** the exact demo script — canned scenarios, approval click-through, tamper-then-verify — run automated before rehearsal.
-- **Security (manual):** confirm agent keys can't reach admin endpoints and vice versa; confirm a raw injection attempt in `params_json` doesn't touch the DB unexpectedly.
-- **Performance:** the one performance test that matters here is the 20–30 call burst — don't over-invest in open-ended load testing this project doesn't need.
-
----
+| Symptom | Fix |
+|---|---|
+| `db:start`: "failed to start" / port in use | Another instance is running, or a stale `.data/postgres/postmaster.pid` — stop it or delete that file. Change `EMBEDDED_PG_PORT` if 54329 is taken (update the URLs too). |
+| `db:start` fails on Windows as admin | Run the terminal as a normal user. |
+| API exits "database unreachable or not migrated" | Start Postgres, run `npm run db:migrate`. |
+| Every call is **blocked** with `fail_closed_opa_unavailable` | OPA isn't running/loaded — `npm run opa:start`; `npm run health` confirms. This is the intended fail-closed behaviour. |
+| `db:seed`: "OPA is not reachable" | Seeded decisions come from OPA — start it first. |
+| Dashboard shows "Live channel lost — polling" | The API's LISTEN connection is down (or you use Supabase's transaction pooler). Data still refreshes every 2.5 s. |
+| Login loops back to /login | `API_URL` must point at the running API; the dashboard validates sessions server-side. |
+| Classifier "unavailable" in `/health` | `apps/api/models/injection-model.json` missing — restore from git or `npm run ml:setup && npm run ml:train`. |
+| Integration tests: "Cannot reach the test database" | `npm run db:start` (creates `agentguard_test`), or set `TEST_DATABASE_URL`/`TEST_DATABASE_ADMIN_URL`. |
+| `npm run demo:tamper` says a tamper is already active | `npm run demo:tamper -- --restore` first. |
 
 ## Known limitations
 
-Stated directly, because a reviewer respects an acknowledged tradeoff far more than a gap they find themselves:
-
-- **Demo password.** Dashboard login uses a single hardcoded/seeded admin credential. Acceptable *because* it's disclosed here and in the report as a known, deliberate gap — not because it's actually secure.
-- **Polling, not true async.** The approval "pause" is implemented via polling with a timeout-to-deny, not a push-based block. It works, but it isn't a real async agent-pausing mechanism.
-- **Mediocre injection classifier.** Trained on a few hundred labeled examples — expected to be mediocre on real-world input. Reported honestly rather than oversold. The rule-based scorer is the more reliable signal and should be treated as primary.
-- **App-layer-only audit protection, unless you add the DB grant.** Hash-chaining proves tampering is *detectable*. Making "no update/delete path" actually true (not just intended) requires a database-level `REVOKE UPDATE, DELETE` on `audit_log` — add this, don't rely on "the code just doesn't have that endpoint."
-- **Two trust boundaries into the data.** The dashboard reads via REST *and* via a direct Supabase realtime subscription that bypasses the backend. This is a known architectural shortcut, not a solved design — see the RLS discussion in `docs/AgentGuard_Backend_DB_Schema.md` Section 11 for the two real fixes (migrate admin auth onto Supabase Auth so RLS can check `auth.uid()`, or drop the direct subscription and route all reads through the backend).
-- **Agent can't be forced through AgentGuard.** The demo agent is trusted to route through AgentGuard by construction. Nothing external stops a differently-written agent from calling a mocked tool directly. Out of scope by design, not an oversight.
-- **No production posture.** No multi-tenancy, no production-grade auth/secrets management, no regulatory compliance work, no mobile support. This is explicitly a demonstration-scale reference implementation.
-- **OPA failure behavior must be fail-closed.** If OPA is unreachable, the system should block, not silently allow. This needs to be an explicit, implemented decision — not left as a default.
-
----
-
-## Project phases
-
-Roughly 16 weeks; compress or stretch based on actual time available.
-
-| Phase | Weeks | Focus | Done when |
-|---|---|---|---|
-| 0 — Setup | 1 | Repo, schema, skeleton apps | Empty end-to-end request shows up on the dashboard |
-| 1 — Core interception loop | 2–3 | Demo agent, `/api/tool-call` logging, unstyled activity feed | Every agent call appears on the dashboard within seconds |
-| 2 — Risk scoring | 4–5 | Rule scorer, injection classifier, combined score | Bulk-delete visibly scores higher than a routine call |
-| 3 — OPA policy engine | 6–7 | Learn Rego, wire OPA as sole decision authority | Correct decisions across 3+ scenarios |
-| 4 — Approval workflow | 8–9 | `approvals` table, polling + timeout, Approve/Reject UI | An `approve` decision genuinely pauses the pipeline |
-| 5 — Audit log | 10–11 | Hash-chaining, verifier, `/audit-log` page | Manually editing a row is caught by the verifier |
-| 6 — Frontend polish + demo panel | 12–13 | Overview stats/charts, `/demo` page, seed script | Full demo runnable from `/demo` without touching DB/terminal |
-| 7 — Testing & hardening | 14 | Repeat all attack scenarios, light load test | Nothing flaky under a 20–30 call burst |
-| 8 — Docs, report, rehearsal | 15–16 | Full report, backup video, dry run on demo hardware | — |
-
-**Front-load OPA.** Rego has a real learning curve and is explicitly the highest-risk item for slipping into the final weeks — start it in Phase 3, not Phase 7.
-
----
-
-## Open questions
-
-Unresolved items worth pinning down before or during implementation rather than discovering live:
-
-1. OpenAI or Gemini — which one, concretely?
-2. Solo or team project? Materially changes whether the 16-week phase plan is realistic.
-3. Are the sample Rego thresholds (`<30` allow / `30–70` approve / `≥70` block) final or just a starting point?
-4. What counts as "unusual hour" for the payment scenario — needs a concrete, testable definition.
-5. **If OPA is unreachable, does the system fail open or fail closed?** Not defined by default anywhere — resolve this explicitly as fail-closed before building the failure path, not after.
-6. If only one of the two risk sub-scores is available at policy time, what's the fallback combination rule?
-7. Where does the labeled injection dataset come from, and what's the benign/injection split?
-8. Does the hash chain have a defined genesis row (first row, `prev_hash = null`), and does the verifier handle it correctly?
-9. How are two near-simultaneous approval decisions on the same item resolved? (Single-admin MVP scope may make this moot for now — confirm that assumption.)
-10. Do canned demo scenarios call the real LLM API at all, or are they scripted from the input layer down? This materially affects how much they actually de-risk the demo from LLM downtime.
-
----
-
-## Report / documentation structure
-
-For the accompanying written report:
-
-1. Introduction & problem statement
-2. Related work — name real tools (Lakera, OPA-based gateways, etc.), state this project's smaller, defensible scope honestly
-3. System architecture
-4. Component design (interceptor, scoring, policy, approvals, audit, dashboard)
-5. Database design
-6. Implementation details & tech choices — including what was deliberately cut, and why (no Kafka, no microservices, polling instead of push)
-7. Testing & results
-8. Limitations & future work — see [Known limitations](#known-limitations) above; state these directly rather than letting a reviewer find them
-9. Conclusion
-
-**Appendix references:**
-- Sample Rego starting policy and hash-chain pseudocode: `docs/AgentGuard_Implementation_Plan.pdf`, Section 11
-- Full requirement traceability (FR-001 → FR-020): `docs/AgentGuard_PRD.md`, Section 17
-- Endpoint-level auth/validation/error contract: `docs/AgentGuard_TRD.md`, Section 6
-- Schema, indexes, RLS decision: `docs/AgentGuard_Backend_DB_Schema.md`
-- Screen flows and state machines: `docs/AgentGuard_WebAppFlow.md`
-- Component and design token spec: `docs/AgentGuard_UIUX_Design_Spec.md`
-
----
-
-*This README consolidates the PRD, TRD, DB schema spec, UI/UX spec, web app flow, and implementation plan. Where those source documents disagree or leave something undefined, the discrepancy is called out above rather than silently resolved — check [Open questions](#open-questions) and [Known limitations](#known-limitations) before treating anything here as final.*
+- **Demo-grade admin auth.** One seeded admin from `.env`; no user management, no brute-force lockout, no MFA. Disclosed, not hidden.
+- **Polling, not true async pausing.** The approval "pause" is a held HTTP request polling the approvals table (or a `pending` response); it is not a push-based agent pause.
+- **Small classifier.** ~800 mostly templated examples. 90 % on a 30-example hand-written challenge set; expect worse on real attacks. The rule scorer and policy are the primary signal.
+- **Simulated clock in canned scenarios.** Scenario timing signals use a fixed local time so demos are deterministic; this is labelled on every such call. Real agent calls always use server time.
+- **Tail truncation.** The hash chain detects edits, deletions in the middle and broken links, but deleting the newest rows leaves a shorter, valid chain. An external anchor (e.g. periodically publishing the head hash) would close this; out of scope.
+- **Trust in the agent.** AgentGuard executes the (mock) tools itself, so the demo agent cannot run them directly; a different agent with its own real tool access could still bypass the gateway.
+- **DB superuser can still tamper** — detectably. Append-only is enforced for the app role and by trigger, but the owner can disable the trigger (that is how the tamper demo works); the verifier is what catches it.
+- **Live updates need a session-mode Postgres connection** (no Supabase transaction pooler). The polling fallback covers it.
+- **Not production:** single instance, no HA, no multi-tenancy, no compliance work, desktop-first UI. Live LLM run untested here without an API key.

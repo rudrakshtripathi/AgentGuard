@@ -1,0 +1,127 @@
+/* Explicit content sources: never scan build output (.next*, test traces) for class names. */
+@import 'tailwindcss' source(none);
+@source '../app';
+@source '../components';
+@source '../lib';
+
+/* Design tokens — AgentGuard_UIUX_Design_Spec.md §2 / §9 ("Signal & Ledger"). */
+@theme {
+  --color-bg: #14171c;
+  --color-surface: #1b1f27;
+  --color-raised: #232833;
+  --color-border: #2a303c;
+  --color-text: #e8ebf0;
+  --color-muted: #8b93a3;
+  --color-primary: #3fd0c9;
+  --color-secondary: #5b8def;
+  --color-success: #3fd0c9;
+  --color-warning: #f0a84e;
+  --color-error: #e5484d;
+  --color-info: #5b8def;
+  --color-on-accent: #0d0f13;
+
+  --font-display: 'Space Grotesk', ui-sans-serif, system-ui, sans-serif;
+  --font-sans: 'Inter Variable', ui-sans-serif, system-ui, sans-serif;
+  --font-mono: 'IBM Plex Mono', ui-monospace, 'Cascadia Mono', monospace;
+
+  --radius-sm: 4px;
+  --radius-md: 8px;
+  --radius-lg: 12px;
+  --radius-pill: 999px;
+
+  --shadow-1: 0 1px 2px rgba(0, 0, 0, 0.3);
+  --shadow-2: 0 4px 12px rgba(0, 0, 0, 0.4);
+  --shadow-3: 0 8px 32px rgba(0, 0, 0, 0.5);
+
+  --breakpoint-tablet: 768px;
+  --breakpoint-desktop: 1280px;
+}
+
+@layer base {
+  html {
+    color-scheme: dark;
+    background: var(--color-bg);
+    color: var(--color-text);
+    font-family: var(--font-sans);
+    font-size: 14px;
+    line-height: 20px;
+  }
+  body {
+    min-height: 100vh;
+    background: var(--color-bg);
+  }
+  /* Spec §6: 2px primary focus ring with 2px offset on every interactive element. */
+  :focus-visible {
+    outline: 2px solid var(--color-primary);
+    outline-offset: 2px;
+  }
+}
+
+@layer components {
+  .type-h1 {
+    font-family: var(--font-display);
+    font-size: 28px;
+    line-height: 36px;
+    font-weight: 600;
+  }
+  .type-h2 {
+    font-family: var(--font-display);
+    font-size: 20px;
+    line-height: 28px;
+    font-weight: 600;
+  }
+  .type-h3 {
+    font-size: 16px;
+    line-height: 24px;
+    font-weight: 600;
+  }
+  .type-caption {
+    font-size: 12px;
+    line-height: 16px;
+    color: var(--color-muted);
+  }
+  .type-label {
+    font-size: 12px;
+    line-height: 16px;
+    font-weight: 500;
+    text-transform: uppercase;
+    letter-spacing: 0.04em;
+    color: var(--color-muted);
+  }
+  .type-data {
+    font-family: var(--font-mono);
+    font-size: 13px;
+    line-height: 20px;
+  }
+}
+
+/* The only two animations the spec allows (§6): new feed row, and verify pulse. */
+@keyframes row-enter {
+  from {
+    background-color: var(--color-raised);
+  }
+  to {
+    background-color: transparent;
+  }
+}
+.row-enter {
+  animation: row-enter 250ms ease-out;
+}
+@keyframes chain-pulse {
+  0%,
+  100% {
+    opacity: 1;
+  }
+  50% {
+    opacity: 0.35;
+  }
+}
+.chain-pulse {
+  animation: chain-pulse 900ms ease-in-out infinite;
+}
+@media (prefers-reduced-motion: reduce) {
+  .row-enter,
+  .chain-pulse {
+    animation: none;
+  }
+}
