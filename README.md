@@ -180,7 +180,7 @@ Canned scenarios never call the LLM. Every scenario pins its evaluation clock (1
 
 ## API
 
-All JSON; errors are `{"error":{"code","message","details?"}}`. Agent endpoint: `Authorization: Bearer <agent key>`. Admin endpoints: `ag_session` cookie (HttpOnly, SameSite=Strict) and, for POST, header `x-agentguard-csrf: 1`.
+All JSON; errors are `{"error":{"code","message","details?"}}`. Agent endpoint: `Authorization: Bearer <agent key>`. Admin endpoints: `ag_session` cookie (HttpOnly, SameSite=Strict) and, for POST, header `x-agentguard-csrf: 1`
 
 | Method & path | Auth | Purpose |
 |---|---|---|
