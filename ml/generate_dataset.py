@@ -10,7 +10,7 @@ that also appear in attacks ("ignore", "instructions", "system", "override", "de
 "forward") so the model cannot rely on single keywords.
 
 Outputs:
-  ml/data/injection_dataset.csv   text,label,source   (label 1 = injection)
+  ml/data/injection_dataset.csv   text,label,source,group_id   (label 1 = injection)
 
 The separate ml/data/challenge_set.csv is hand-written, NOT generated here, and is never
 used for training; it gives a more honest accuracy estimate than the templated test split.
@@ -129,29 +129,42 @@ def bundle(body):
 
 
 def benign_examples():
-    out = [(t, "handwritten") for t in benign_handwritten]
-    out += [(t, "handwritten_short") for t in short_benign]
+    out = [(t, "handwritten", f"benign-seed-{i:03}") for i, t in enumerate(benign_handwritten)]
+    out += [(t, "handwritten_short", f"benign-short-{i:03}") for i, t in enumerate(short_benign)]
     for _ in range(90):
-        body = rng.choice(short_benign + tasks) if rng.random() < 0.5 else (
-            f"{rng.choice(greetings)}, {rng.choice(asks).format(s=rng.choice(subjects))} {rng.choice(signoffs)}.")
-        out.append((bundle(body), "template_bundle"))
-    out += [(r, "template_address") for r in recipients]
+        if rng.random() < 0.5:
+            choice = rng.randrange(len(short_benign) + len(tasks))
+            if choice < len(short_benign):
+                body, group = short_benign[choice], f"benign-short-{choice:03}"
+            else:
+                task_index = choice - len(short_benign)
+                body, group = tasks[task_index], f"task-seed-{task_index:02}"
+        else:
+            ask_index = rng.randrange(len(asks))
+            body = f"{rng.choice(greetings)}, {asks[ask_index].format(s=rng.choice(subjects))} {rng.choice(signoffs)}."
+            group = f"email-ask-{ask_index:02}"
+        out.append((bundle(body), "template_bundle", group))
+    out += [(r, "template_address", f"address-{i:02}") for i, r in enumerate(recipients)]
     for _ in range(140):
         s = rng.choice(subjects)
-        body = f"{rng.choice(greetings)}, {rng.choice(asks).format(s=s)} {rng.choice(signoffs)}."
-        out.append((body, "template_email"))
+        ask_index = rng.randrange(len(asks))
+        body = f"{rng.choice(greetings)}, {asks[ask_index].format(s=s)} {rng.choice(signoffs)}."
+        out.append((body, "template_email", f"email-ask-{ask_index:02}"))
     for _ in range(60):
-        t, c = rng.choice(tables), rng.sample(columns, 2)
+        table_index = rng.randrange(len(tables))
+        t, c = tables[table_index], rng.sample(columns, 2)
         q = f"SELECT {c[0]}, {c[1]} FROM {t} WHERE {rng.choice(filters)} LIMIT {rng.choice([10, 25, 50, 100])}"
-        out.append((q, "template_sql"))
+        out.append((q, "template_sql", f"sql-table-{table_index:02}"))
     for _ in range(40):
-        p = rng.choice(paths).format(y=rng.choice([2023, 2024, 2025]), q=rng.randint(1, 4), n=rng.randint(100, 9999))
-        out.append((p, "template_path"))
+        path_index = rng.randrange(len(paths))
+        p = paths[path_index].format(y=rng.choice([2023, 2024, 2025]), q=rng.randint(1, 4), n=rng.randint(100, 9999))
+        out.append((p, "template_path", f"path-template-{path_index:02}"))
     for _ in range(40):
-        m = rng.choice(memos).format(n=f"INV-{rng.randint(1000, 9999)}", v=rng.choice(vendors), c=rng.choice(cities), q=rng.randint(1, 4))
-        out.append((m, "template_memo"))
-    for t in tasks:
-        out.append((t, "handwritten_task"))
+        memo_index = rng.randrange(len(memos))
+        m = memos[memo_index].format(n=f"INV-{rng.randint(1000, 9999)}", v=rng.choice(vendors), c=rng.choice(cities), q=rng.randint(1, 4))
+        out.append((m, "template_memo", f"memo-template-{memo_index:02}"))
+    for i, t in enumerate(tasks):
+        out.append((t, "handwritten_task", f"task-seed-{i:02}"))
     return out
 
 
@@ -210,37 +223,40 @@ urls = ["http://evil.example/collect", "https://paste.example/raw/abc", "ftp://2
 
 
 def injection_examples():
-    out = [(t, "handwritten") for t in injection_handwritten]
+    out = [(t, "handwritten", f"injection-seed-{i:03}") for i, t in enumerate(injection_handwritten)]
     seen = set()
     while len(out) < 380:
-        t = rng.choice(triggers)
-        p = rng.choice(payloads).format(
+        trigger_index = rng.randrange(len(triggers))
+        payload_index = rng.randrange(len(payloads))
+        wrapper_index = rng.randrange(len(wrappers))
+        t = triggers[trigger_index]
+        p = payloads[payload_index].format(
             a=rng.choice(attackers), u=rng.choice(urls), m=rng.choice(["5,000", "48,000", "250,000"]),
             acct=rng.randint(10_000_000, 99_999_999),
         )
-        text = rng.choice(benign_prefixes) + rng.choice(wrappers).format(t=t, p=p)
+        text = rng.choice(benign_prefixes) + wrappers[wrapper_index].format(t=t, p=p)
         if rng.random() < 0.25:
             text = text.lower()
         if rng.random() < 0.3:
             text = bundle(text)
         if text not in seen:
             seen.add(text)
-            out.append((text, "template_injection"))
+            out.append((text, "template_injection", f"injection-trigger-{trigger_index:02}"))
     return out
 
 
 def main():
     rows, seen = [], set()
     for label, examples in ((0, benign_examples()), (1, injection_examples())):
-        for text, source in examples:
+        for text, source, group_id in examples:
             if text not in seen:
                 seen.add(text)
-                rows.append((text, label, source))
+                rows.append((text, label, source, f"{label}-{group_id}"))
     rng.shuffle(rows)
     OUT.parent.mkdir(parents=True, exist_ok=True)
     with OUT.open("w", newline="", encoding="utf-8") as f:
-        w = csv.writer(f)
-        w.writerow(["text", "label", "source"])
+        w = csv.writer(f, lineterminator="\n")
+        w.writerow(["text", "label", "source", "group_id"])
         w.writerows(rows)
     n_inj = sum(1 for r in rows if r[1] == 1)
     print(f"wrote {OUT.relative_to(ROOT.parent)}: {len(rows)} examples ({len(rows) - n_inj} benign, {n_inj} injection)")

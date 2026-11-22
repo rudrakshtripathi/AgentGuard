@@ -8,6 +8,8 @@ if (existsSync(rootEnv)) process.loadEnvFile(rootEnv);
 const apiUrl = (process.env.API_URL ?? 'http://127.0.0.1:4000').replace(/\/$/, '');
 
 const config: NextConfig = {
+  output: process.env.NEXT_STANDALONE === '1' ? 'standalone' : undefined,
+  outputFileTracingRoot: resolve(process.cwd(), '..', '..'),
   // The E2E suite builds into its own directory so it never clobbers the normal build.
   distDir: process.env.NEXT_DIST_DIR ?? '.next',
   // The browser only ever talks to this origin; /api/* is proxied to the Express API, so the

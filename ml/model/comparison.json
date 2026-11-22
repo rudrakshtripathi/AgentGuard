@@ -1,0 +1,272 @@
+{
+  "protocol": {
+    "seed": 20261122,
+    "outer_folds": 5,
+    "inner_folds": 3,
+    "grouping": "StratifiedGroupKFold; all rows share no group IDs across a train/validation split",
+    "tuning": "Nested within each outer training fold; C in {1,10,100} and class_weight in {None,balanced}; optimize recall at 5% FPR, then Brier score",
+    "challenge_set": "Loaded only after CV comparison and final selection; report-only, never used for tuning or selection"
+  },
+  "dataset": {
+    "training_rows": 903,
+    "base_rows": 803,
+    "new_hand_written_rows": 100,
+    "benign": 473,
+    "injection": 430,
+    "groups": 239,
+    "grouping_note": "All generated rows have source-template or handwritten-seed group IDs; the 100 new handwritten examples each have a unique seed ID."
+  },
+  "models": {
+    "word_logistic": {
+      "roc_auc": {
+        "mean": 0.9985023047475196,
+        "std": 0.0017934334525060772
+      },
+      "pr_auc": {
+        "mean": 0.9983642624571019,
+        "std": 0.002001396098792108
+      },
+      "recall_at_1pct_fpr": {
+        "mean": 0.9418604651162792,
+        "std": 0.06780176621913139
+      },
+      "recall_at_5pct_fpr": {
+        "mean": 0.9883720930232558,
+        "std": 0.020140125669405536
+      },
+      "f1": {
+        "mean": 0.9712827132338793,
+        "std": 0.014732982363630596
+      },
+      "brier": {
+        "mean": 0.02609228667450637,
+        "std": 0.02494397821518872
+      },
+      "log_loss": {
+        "mean": 0.1112931560092814,
+        "std": 0.09992152812255284
+      },
+      "accuracy": {
+        "mean": 0.9723143032535297,
+        "std": 0.014091974921384854
+      }
+    },
+    "word_linear_svc": {
+      "roc_auc": {
+        "mean": 0.9986971014870178,
+        "std": 0.0009232339987721827
+      },
+      "pr_auc": {
+        "mean": 0.9985321660135795,
+        "std": 0.001061403563568223
+      },
+      "recall_at_1pct_fpr": {
+        "mean": 0.9162790697674419,
+        "std": 0.08481201176190917
+      },
+      "recall_at_5pct_fpr": {
+        "mean": 0.9953488372093023,
+        "std": 0.010400316174417645
+      },
+      "f1": {
+        "mean": 0.9728274288548369,
+        "std": 0.01199523028517287
+      },
+      "brier": {
+        "mean": 0.021182652812372978,
+        "std": 0.008755289496211422
+      },
+      "log_loss": {
+        "mean": 0.07866258757354008,
+        "std": 0.03407919104031777
+      },
+      "accuracy": {
+        "mean": 0.9734131368937998,
+        "std": 0.012049377535260487
+      }
+    },
+    "word_char_logistic": {
+      "roc_auc": {
+        "mean": 0.9987226229849735,
+        "std": 0.0009023324877719963
+      },
+      "pr_auc": {
+        "mean": 0.9985968658597606,
+        "std": 0.001061666947794809
+      },
+      "recall_at_1pct_fpr": {
+        "mean": 0.9325581395348838,
+        "std": 0.07988634435961708
+      },
+      "recall_at_5pct_fpr": {
+        "mean": 0.9953488372093023,
+        "std": 0.006368866947734501
+      },
+      "f1": {
+        "mean": 0.9850100355533042,
+        "std": 0.006560698263493592
+      },
+      "brier": {
+        "mean": 0.014082735161067044,
+        "std": 0.0038066441747568397
+      },
+      "log_loss": {
+        "mean": 0.0583807041868921,
+        "std": 0.010591530399224365
+      },
+      "accuracy": {
+        "mean": 0.985598526703499,
+        "std": 0.006329092782773615
+      }
+    },
+    "word_char_linear_svc": {
+      "roc_auc": {
+        "mean": 0.9986249641917759,
+        "std": 0.0010327837943654495
+      },
+      "pr_auc": {
+        "mean": 0.9984895035095466,
+        "std": 0.0012116787388244243
+      },
+      "recall_at_1pct_fpr": {
+        "mean": 0.9255813953488371,
+        "std": 0.09539136884648225
+      },
+      "recall_at_5pct_fpr": {
+        "mean": 0.9953488372093023,
+        "std": 0.006368866947734501
+      },
+      "f1": {
+        "mean": 0.9805833602377307,
+        "std": 0.009419303726622015
+      },
+      "brier": {
+        "mean": 0.014944874135016505,
+        "std": 0.006389647013789201
+      },
+      "log_loss": {
+        "mean": 0.05839840640782172,
+        "std": 0.019990760733749526
+      },
+      "accuracy": {
+        "mean": 0.9811663597298956,
+        "std": 0.009303718834686642
+      }
+    },
+    "complement_nb": {
+      "roc_auc": {
+        "mean": 0.9980351050808614,
+        "std": 0.0024798770753408934
+      },
+      "pr_auc": {
+        "mean": 0.9978810905543785,
+        "std": 0.0027164046570338786
+      },
+      "recall_at_1pct_fpr": {
+        "mean": 0.9418604651162792,
+        "std": 0.07490755073677398
+      },
+      "recall_at_5pct_fpr": {
+        "mean": 0.9813953488372092,
+        "std": 0.024112141108520602
+      },
+      "f1": {
+        "mean": 0.9412103324357648,
+        "std": 0.018321389619697447
+      },
+      "brier": {
+        "mean": 0.048327782551543096,
+        "std": 0.011948382137644934
+      },
+      "log_loss": {
+        "mean": 0.170911355228816,
+        "std": 0.034032986061441825
+      },
+      "accuracy": {
+        "mean": 0.9401596071209332,
+        "std": 0.020300272235989927
+      }
+    }
+  },
+  "ordered_by_selection_rule": [
+    "word_char_logistic",
+    "word_char_linear_svc",
+    "word_linear_svc",
+    "word_logistic",
+    "complement_nb"
+  ],
+  "best_cross_validated_candidate": "word_char_logistic",
+  "selected_model": "word_logistic",
+  "selection_note": "word_char_logistic was within one baseline standard deviation (0.020) of the baseline's recall at 5% FPR, so the simpler word-only LogisticRegression remains selected.",
+  "selected_parameters": {
+    "C": 100.0,
+    "class_weight": null
+  },
+  "selected_grouped_oof_thresholds": {
+    "review_band_30_to_70": {
+      "threshold": 0.3,
+      "precision": 0.5074626865671642,
+      "recall": 0.07906976744186046,
+      "confusion_matrix": {
+        "tn": 440,
+        "fp": 33,
+        "fn": 396,
+        "tp": 34
+      }
+    },
+    "final_score_block_at_70": {
+      "threshold": 0.7,
+      "precision": 0.9899749373433584,
+      "recall": 0.9186046511627907,
+      "confusion_matrix": {
+        "tn": 469,
+        "fp": 4,
+        "fn": 35,
+        "tp": 395
+      }
+    },
+    "injection_score_block_at_80": {
+      "threshold": 0.8,
+      "precision": 0.9943977591036415,
+      "recall": 0.8255813953488372,
+      "confusion_matrix": {
+        "tn": 471,
+        "fp": 2,
+        "fn": 75,
+        "tp": 355
+      }
+    }
+  },
+  "challenge_set_finalists": {
+    "word_logistic": {
+      "n": 30,
+      "accuracy": 0.9666666666666667,
+      "precision": 0.9375,
+      "recall": 1.0,
+      "confusion_matrix": {
+        "tn": 14,
+        "fp": 1,
+        "fn": 0,
+        "tp": 15
+      }
+    },
+    "word_char_logistic": {
+      "n": 30,
+      "accuracy": 0.9666666666666667,
+      "precision": 0.9375,
+      "recall": 1.0,
+      "confusion_matrix": {
+        "tn": 14,
+        "fp": 1,
+        "fn": 0,
+        "tp": 15
+      }
+    }
+  },
+  "export": {
+    "max_probability_error": 2.220446049250313e-16,
+    "verified_rows": 969,
+    "format": "v1"
+  },
+  "sklearn_version": "1.9.1"
+}

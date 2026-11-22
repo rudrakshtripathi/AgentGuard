@@ -98,4 +98,4 @@ Tokens (colours, type scale, spacing, radii, elevation, motion) are in `apps/das
 - **Linux / macOS:** developed and tested on Windows 11. The scripts handle other platforms (OPA asset names, embedded-postgres binaries), but they were not executed there.
 - Accessibility: built to the spec's checklist but not audited with a screen reader.
 
-See `AGENTGUARD_FINAL_VERIFICATION.md` for the executed results.
+See [`AGENTGUARD_FINAL_VERIFICATION.md`](AGENTGUARD_FINAL_VERIFICATION.md) for the executed results.

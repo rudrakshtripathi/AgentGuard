@@ -22,6 +22,7 @@
     "opa:test": "node scripts/opa-test.mjs",
     "ml:setup": "node scripts/ml.mjs setup",
     "ml:train": "node scripts/ml.mjs train",
+    "ml:compare": "node scripts/ml.mjs compare",
     "dev:api": "npm run dev -w @agentguard/api",
     "dev:dashboard": "npm run dev -w @agentguard/dashboard",
     "start:api": "npm run start -w @agentguard/api",

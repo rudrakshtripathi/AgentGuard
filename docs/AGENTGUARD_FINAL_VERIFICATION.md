@@ -17,12 +17,12 @@ audit_log (SHA-256 chain) ─► verifier (API, CLI, dashboard)      Postgres NO
 ```
 
 ## 2. Features implemented
-All 20 PRD functional requirements — see the traceability table in `AGENTGUARD_IMPLEMENTATION_STATUS.md` §1. All 11 specified endpoints plus `/api/auth/session`, `/api/demo/scenarios`, `/api/events`, `/health`. All 7 screens and the 7 named components.
+All 20 PRD functional requirements — see the traceability table in [AGENTGUARD_IMPLEMENTATION_STATUS.md](AGENTGUARD_IMPLEMENTATION_STATUS.md) §1. All 11 specified endpoints plus `/api/auth/session`, `/api/demo/scenarios`, `/api/events`, `/health`. All 7 screens and the 7 named components.
 
 ## 3. Files / modules created
 | Area | Files |
 |---|---|
-| Root | `package.json` (npm workspaces), `.env.example`, `.gitignore`, `eslint.config.mjs`, `playwright.config.ts`, `README.md`, the three `AGENTGUARD_*.md` reports |
+| Root | `package.json` (npm workspaces), `.env.example`, `.gitignore`, `eslint.config.mjs`, `playwright.config.ts`, `README.md`, the three `docs/AGENTGUARD_*.md` reports |
 | Database | `db/migrations/001_initial_schema.sql`, `002_change_notifications.sql` |
 | Policy | `policies/agentguard.rego`, `policies/agentguard_test.rego` |
 | ML | `ml/generate_dataset.py`, `ml/train.py`, `ml/requirements.txt`, `ml/data/injection_dataset.csv`, `ml/data/challenge_set.csv`, `ml/model/metrics.json` |

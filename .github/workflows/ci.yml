@@ -1,0 +1,88 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  checks:
+    name: Node ${{ matrix.node }} checks
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node: [20, 24]
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm run lint
+      - run: npm run test:unit
+
+  policy:
+    name: OPA policy tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npm run opa:install
+      - run: npm run opa:test
+
+  integration:
+    name: Integration tests
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17.6-bookworm
+        env:
+          POSTGRES_DB: agentguard_test
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: ci-postgres-password
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d agentguard_test"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 20
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npm run opa:install
+      - name: Start OPA
+        run: |
+          nohup tools/bin/opa run --server --addr 127.0.0.1:8181 policies >/tmp/opa.log 2>&1 &
+          for attempt in {1..30}; do
+            if curl --fail --silent http://127.0.0.1:8181/health >/dev/null; then exit 0; fi
+            sleep 1
+          done
+          cat /tmp/opa.log
+          exit 1
+      - name: Run integration tests
+        env:
+          TEST_DATABASE_NAME: agentguard_test
+          TEST_DATABASE_ADMIN_URL: postgres://postgres:ci-postgres-password@127.0.0.1:5432/agentguard_test
+          TEST_DATABASE_URL: postgres://agentguard_app:ci-app-password@127.0.0.1:5432/agentguard_test
+          DATABASE_ADMIN_URL: postgres://postgres:ci-postgres-password@127.0.0.1:5432/agentguard_test
+          DATABASE_URL: postgres://agentguard_app:ci-app-password@127.0.0.1:5432/agentguard_test
+          OPA_URL: http://127.0.0.1:8181
+        run: npm run test:integration

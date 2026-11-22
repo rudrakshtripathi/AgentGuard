@@ -1,8 +1,8 @@
 #!/usr/bin/env node
 // Python tooling for the prompt-injection classifier.
 //   node scripts/ml.mjs setup  -> creates ml/.venv and installs ml/requirements.txt
-//   node scripts/ml.mjs train  -> regenerates the dataset, trains TF-IDF + LogisticRegression,
-//                                 exports the model to apps/api/models/injection-model.json
+//   node scripts/ml.mjs compare -> compares grouped-CV candidates and exports the selected model
+//   node scripts/ml.mjs train   -> regenerates the data and runs the same comparison/export
 // Python is only needed to (re)train. The trained model artifact is committed, so the
 // API runs without Python.
 import { spawnSync } from 'node:child_process';
@@ -39,7 +39,13 @@ if (command === 'setup') {
   }
   run(venvPython, ['-I', resolve(rootDir, 'ml', 'generate_dataset.py')]);
   run(venvPython, ['-I', resolve(rootDir, 'ml', 'train.py')]);
+} else if (command === 'compare') {
+  if (!existsSync(venvPython)) {
+    console.error('ml/.venv not found. Run `npm run ml:setup` first.');
+    process.exit(1);
+  }
+  run(venvPython, ['-I', resolve(rootDir, 'ml', 'compare_models.py')]);
 } else {
-  console.error('usage: node scripts/ml.mjs <setup|train>');
+  console.error('usage: node scripts/ml.mjs <setup|compare|train>');
   process.exit(1);
 }

@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest';
 import type { RuleContext } from '../../src/scoring/ruleScorer.js';
 import { isOffHours, localHour, scoreRules } from '../../src/scoring/ruleScorer.js';
 import { CLASSIFIER_UNAVAILABLE_FLOOR, assessRisk, combineScores } from '../../src/scoring/riskScoring.js';
+import { scanSensitiveData } from '../../src/scoring/sensitiveData.js';
 
 // 11:00 UTC on a weekday — inside business hours.
 const ctx: RuleContext = {
@@ -59,6 +60,32 @@ describe('rule scorer (weighted checklist)', () => {
     expect(ddl.rule_score).toBeGreaterThanOrEqual(70); // lands in the block band
     const read = scoreRules('run_db_query', { query: 'SELECT id FROM projects LIMIT 5' }, ctx);
     expect(read.rule_score).toBe(10);
+  });
+
+  it('analyzes every SQL statement and ignores semicolons inside strings', () => {
+    const cases = [
+      'SELECT 1; DROP TABLE users',
+      '/* x */ DROP TABLE t',
+      '-- harmless lead\nDROP TABLE t',
+      'sElEcT 1; dElEtE FROM orders',
+      'WITH d AS (DELETE FROM orders RETURNING *) SELECT * FROM d',
+      "SELECT '; DROP TABLE invoices'",
+    ];
+    for (const query of cases.slice(0, 5)) {
+      const result = scoreRules('run_db_query', { query }, ctx);
+      expect(result.category, query).toBe('destructive');
+      expect(ids(result), query).toContain('destructive_query');
+    }
+    const stringSemicolon = scoreRules('run_db_query', { query: cases[5] }, ctx);
+    expect(stringSemicolon.category).toBe('read');
+    expect(stringSemicolon.rule_score).toBe(10);
+  });
+
+  it('keeps plain selects low risk and sends unparseable SQL to review', () => {
+    expect(scoreRules('run_db_query', { query: 'SELECT 1' }, ctx).rule_score).toBe(10);
+    const malformed = scoreRules('run_db_query', { query: "SELECT 'unterminated" }, ctx);
+    expect(ids(malformed)).toContain('sql_analysis_uncertain');
+    expect(malformed.rule_score).toBeGreaterThanOrEqual(50);
   });
 
   it('scores unknown tools conservatively, never as zero', () => {
@@ -122,5 +149,52 @@ describe('score combination', () => {
     expect(missing.injection_score).toBeNull();
     expect(missing.breakdown.injection.status).toBe('unavailable');
     expect(missing.final_score).toBe(CLASSIFIER_UNAVAILABLE_FLOOR);
+  });
+});
+
+describe('sensitive data detection', () => {
+  it('detects credential patterns without returning matched values', () => {
+    const samples: Array<[string, string]> = [
+      ['sk_demo_fake12345678901234567890', 'api_key_token'],
+      ['ghp_fakeToken12345678901234567890', 'api_key_token'],
+      ['Ab9xYQ2mN8vLk4pT7cR3zW6fH1jD5sG0', 'high_entropy_token'],
+      ['-----BEGIN PRIVATE KEY-----\nnot-a-real-key\n-----END PRIVATE KEY-----', 'private_key_block'],
+      ['4111111111111111', 'credit_card'],
+      ['password=do-not-use-this-value', 'credential_assignment'],
+      ['secret=synthetic-value', 'credential_assignment'],
+      ['token=synthetic-value', 'credential_assignment'],
+      ['AKIAIOSFODNN7EXAMPLE', 'aws_access_key'],
+      ['a@one.test b@two.test c@three.test d@four.test e@five.test', 'email_list'],
+      ['+1 212 555 0101, +1 212 555 0102, +1 212 555 0103, +1 212 555 0104, +1 212 555 0105', 'phone_list'],
+    ];
+    for (const [text, kind] of samples) expect(scanSensitiveData(text)).toContain(kind);
+    expect(scanSensitiveData('Reference: 4111111111111112')).not.toContain('credit_card');
+  });
+
+  it('keeps benign email text low risk', () => {
+    const result = scoreRules('send_email', { to: 'maria@acme.example', subject: 'Meeting', body: 'See you at 2 PM.' }, ctx);
+    expect(result.rule_score).toBe(10);
+    expect(ids(result)).not.toContain('sensitive_content_in_email');
+  });
+
+  it('scans the subject, body, and attachment names', () => {
+    for (const params of [
+      { to: 'inside@acme.example', subject: 'password=synthetic-value' },
+      { to: 'inside@acme.example', body: 'password=synthetic-value' },
+      { to: 'inside@acme.example', attachments: [{ filename: 'password=synthetic-value.txt' }] },
+    ]) {
+      expect(ids(scoreRules('send_email', params, ctx))).toContain('sensitive_content_in_email');
+    }
+  });
+
+  it('scores sensitive external email for approval and omits values from score and audit payload', () => {
+    const secret = 'password=synthetic-never-use-this-secret';
+    const result = scoreRules('send_email', { to: 'outside@example.net', subject: 'Credentials', body: secret }, ctx);
+    expect(result.rule_score).toBeGreaterThanOrEqual(30);
+    expect(ids(result)).toContain('sensitive_content_in_email');
+    expect(JSON.stringify(result)).not.toContain(secret);
+    const auditPayload = JSON.stringify({ event_type: 'score_computed', payload: { breakdown: { rules: result } } });
+    expect(auditPayload).not.toContain(secret);
+    expect(JSON.stringify(result)).toContain('credential_assignment');
   });
 });

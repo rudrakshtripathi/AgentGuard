@@ -1,5 +1,7 @@
 # AgentGuard
 
+[![CI](https://github.com/rudrakshtripathi/AgentGuard/actions/workflows/ci.yml/badge.svg)](https://github.com/rudrakshtripathi/AgentGuard/actions/workflows/ci.yml)
+
 A policy-enforcement gateway that sits between an AI agent's decision to call a tool and the tool actually running. Every proposed call is **intercepted**, **scored** for risk (rule checklist + a small prompt-injection classifier), **decided by OPA** (allow / block / human approval), **executed only if permitted** (sandboxed mock tools), and **written to a hash-chained, tamper-evident audit log** — all visible live on a dashboard.
 
 This is a time-boxed academic / demo build (single process, single database, no queues). Its limits are stated plainly in [Known limitations](#known-limitations).
@@ -21,7 +23,7 @@ Demo agent ──POST /api/tool-call──► Interceptor ─► Risk scoring �
 - [Demo procedure](#demo-procedure)
 - [How it works](#how-it-works) · [API](#api) · [Environment variables](#environment-variables)
 - [Troubleshooting](#troubleshooting) · [Known limitations](#known-limitations)
-- Status documents: [`AGENTGUARD_IMPLEMENTATION_STATUS.md`](AGENTGUARD_IMPLEMENTATION_STATUS.md), [`AGENTGUARD_ACCEPTANCE_TEST.md`](AGENTGUARD_ACCEPTANCE_TEST.md), [`AGENTGUARD_FINAL_VERIFICATION.md`](AGENTGUARD_FINAL_VERIFICATION.md)
+- Status documents: [`AGENTGUARD_IMPLEMENTATION_STATUS.md`](docs/AGENTGUARD_IMPLEMENTATION_STATUS.md), [`AGENTGUARD_ACCEPTANCE_TEST.md`](docs/AGENTGUARD_ACCEPTANCE_TEST.md), [`AGENTGUARD_FINAL_VERIFICATION.md`](docs/AGENTGUARD_FINAL_VERIFICATION.md)
 
 ## Stack
 
@@ -111,9 +113,22 @@ npm run opa:test     # opa check --strict + opa test policies -v
 ### 5. Classifier (optional — model is committed)
 
 ```bash
-npm run ml:setup     # creates ml/.venv and installs scikit-learn
-npm run ml:train     # regenerates ml/data/injection_dataset.csv, trains, exports apps/api/models/injection-model.json
+npm run ml:setup       # creates ml/.venv and installs the pinned scikit-learn, numpy, and pandas versions
+npm run ml:compare     # grouped nested-CV comparison, final challenge report, and selected-model export
+npm run ml:train       # regenerates grouped training data, then repeats comparison and export
 ```
+
+The comparison used 5 outer `StratifiedGroupKFold` folds, nested 3-fold tuning, and 100 additional hand-written examples. The challenge set was held out until final reporting. Results are mean ± standard deviation:
+
+| Model | Recall @ 5% FPR | Brier | Challenge accuracy |
+|---|---:|---:|---:|
+| Word + char LogisticRegression | 0.995 ± 0.006 | 0.014 ± 0.004 | 0.967 |
+| Word + char calibrated LinearSVC | 0.995 ± 0.006 | 0.015 ± 0.006 | 0.967 |
+| Word calibrated LinearSVC | 0.995 ± 0.010 | 0.021 ± 0.009 | — |
+| Word LogisticRegression (selected) | 0.988 ± 0.020 | 0.026 ± 0.025 | 0.967 |
+| Complement Naive Bayes | 0.981 ± 0.024 | 0.048 ± 0.012 | — |
+
+Word-only LogisticRegression remains selected: the best candidate's recall improvement is within one baseline standard deviation, so the simpler, calibrated-probability v1 format is retained. Both challenge finalists scored 0.967 accuracy, 0.938 precision, and 1.000 recall (TN 14, FP 1, FN 0, TP 15). This is a small demonstration corpus with template-generated data and a 30-example hand-written challenge set; results are not a production accuracy guarantee. Full metrics and threshold operating points are in `ml/model/comparison.md`.
 
 ### 6. Seed demo data (OPA must be running)
 
@@ -131,6 +146,23 @@ npm run health           # env, model, database, OPA, API, dashboard — all sho
 ```
 
 Log in at http://localhost:3000/login with `ADMIN_USERNAME` / `ADMIN_PASSWORD` from `.env`.
+
+## Run with Docker
+
+Copy `.env.docker.example` to `.env`, replace every `CHANGE_ME` value (use URL-safe characters in passwords), then start the stack:
+
+```bash
+cp .env.docker.example .env
+docker compose up --build
+```
+
+The Postgres healthcheck gates the one-off migration service; the API starts after migrations succeed, followed by the dashboard. In another terminal, seed the demo data:
+
+```bash
+docker compose run --rm migrate apps/api/docker-seed.mjs
+```
+
+Open <http://localhost:3000/login> and sign in with `ADMIN_USERNAME` and `ADMIN_PASSWORD` from `.env`. Stop the stack with `docker compose down`; add `-v` only when you also want to remove the database volume.
 
 ## Tests and verification
 
@@ -166,7 +198,7 @@ Canned scenarios never call the LLM. Every scenario pins its evaluation clock (1
 
 **Interceptor (`apps/api/src/interceptor/pipeline.ts`).** One transaction records `tool_calls` + `call_received`; scoring writes `risk_scores` + `score_computed` (with the full breakdown); OPA is asked; one transaction writes `policy_decisions` + `decision_made` and then either executes the mock tool (`tool_executed`), refuses (`tool_not_executed`) or creates a pending approval (`approval_requested`). Any unexpected error after interception records a fail-closed block. Rejected requests (bad key, malformed JSON, too large, invalid) are audited as `request_rejected`.
 
-**Risk scoring (`src/scoring`).** Deterministic weighted checklist — action type (email 10, query 10, payment 30, delete 35, unknown tool 40), target (missing +15, sensitive +20, external recipient +10), scope (bulk recipients +20, wildcard/recursive delete +25, destructive SQL +30, unbounded DELETE/UPDATE +20, DROP/TRUNCATE +20, sensitive table +15), amount (≥1k +10, ≥10k +25, invalid +15), timing (outside business hours +10, +20 for financial/destructive), frequency (≥15 calls/60 s +10, ≥30 +20); capped at 100. Combination: `final = max(rule, injection)`; classification skipped (no text) → `final = rule` with `injection_score` NULL; classifier unavailable → `final = max(rule, 50)`.
+**Risk scoring (`src/scoring`).** Deterministic weighted checklist — action type (email 10, query 10, payment 30, delete 35, unknown tool 40), target (missing +15, sensitive +20, external recipient +10), scope (bulk recipients +20, wildcard/recursive delete +25, any destructive SQL statement +30, unbounded mutation +20, DROP/TRUNCATE +20, sensitive table +15, SQL analysis uncertain +40, sensitive email content +25, sensitive email content to an external recipient +15), amount (≥1k +10, ≥10k +25, invalid +15), timing (outside business hours +10, +20 for financial/destructive), frequency (≥15 calls/60 s +10, ≥30 +20); capped at 100. SQL analysis handles comments, quoted text, multiple statements and data-modifying CTEs conservatively. Email scanning detects credential patterns, private keys, Luhn-valid card numbers, high-entropy tokens, and long email/phone lists; breakdowns contain only data kinds, never matched values. Combination: `final = max(rule, injection)`; classification skipped (no text) → `final = rule` with `injection_score` NULL; classifier unavailable → `final = max(rule, 50)`.
 
 **Classifier (`ml/`).** 807 labelled examples built from hand-written seeds + deterministic templates; TF-IDF word 1–2 grams + logistic regression (C=10, balanced). Held-out templated test split: 99.4 % accuracy (optimistic — templates). **Hand-written challenge set (30, never trained on): 90 %.** Exported to JSON; the TypeScript inference matches sklearn to 1e-9 (tested).
 

@@ -1,5 +1,7 @@
 import type { ToolCategory } from './toolCatalog.js';
 import { lookupTool, UNKNOWN_TOOL_BASE_RISK } from './toolCatalog.js';
+import { analyzeSql } from './sqlAnalysis.js';
+import { scanSensitiveData } from './sensitiveData.js';
 
 /**
  * Deterministic, rule-based risk scorer: a weighted checklist (Implementation Plan §3.3,
@@ -10,9 +12,10 @@ import { lookupTool, UNKNOWN_TOOL_BASE_RISK } from './toolCatalog.js';
  *   action type     send_email 10 · run_db_query 10 · process_payment 30 · delete_file 35 · unknown tool 40
  *   target          missing target +15 · sensitive target +20 · external email recipient +10
  *   scope / bulk    >10 email recipients +20 · wildcard/recursive/multi-path delete +25
- *                   destructive SQL (DELETE/DROP/TRUNCATE/UPDATE/ALTER) +30 · mutation without WHERE +20
+ *                   destructive SQL (DELETE/DROP/TRUNCATE/UPDATE/ALTER/GRANT/REVOKE/INSERT/MERGE) +30 · mutation without WHERE +20
  *                   irreversible DDL (DROP/TRUNCATE) +20
- *                   sensitive SQL table +15
+ *                   sensitive SQL table +15 · SQL analysis uncertain +40
+ *                   sensitive email content +25 · sensitive content to external recipient +15
  *   amount          payment >= 1,000 +10 · payment >= 10,000 +25 (instead of +10) · invalid amount +15
  *   timing          outside business hours +10 (financial/destructive actions: +20)
  *   frequency       >= 15 calls by this agent in the last 60s +10 · >= 30 +20
@@ -44,9 +47,6 @@ export interface RuleScoreResult {
 
 const SENSITIVE_PATH = /(^\/?$)|(^\/(etc|root|boot|var\/lib|prod|production)(\/|$))|(\.(env|pem|key|kdbx)$)|(secret|credential|password|passwd|backup|finance|payroll|\bhr\b|\.ssh)/i;
 const SENSITIVE_TABLE = /\b(users|customers|payments|credentials|passwords|salaries|payroll|api_keys|audit_log)\b/i;
-const DESTRUCTIVE_SQL = /^\s*(delete|drop|truncate|update|alter|grant|revoke)\b/i;
-const MUTATING_SQL = /^\s*(delete|update)\b/i;
-const IRREVERSIBLE_DDL = /^\s*(drop|truncate)\b/i;
 
 export function localHour(at: Date, timeZone: string): number {
   const h = new Intl.DateTimeFormat('en-US', { timeZone, hour: 'numeric', hourCycle: 'h23' }).format(at);
@@ -93,6 +93,22 @@ export function scoreRules(toolName: string, params: Record<string, unknown>, ct
       });
       if (external.length > 0) add('external_recipient', `${external.length} recipient(s) outside internal domains`, 10);
       if (recipients.length > 10) add('bulk_recipients', `${recipients.length} recipients (bulk send)`, 20);
+      const attachments = Array.isArray(params.attachments) ? params.attachments : [];
+      const attachmentNames = attachments.flatMap((attachment) => {
+        if (typeof attachment === 'string') return [attachment];
+        if (typeof attachment !== 'object' || attachment === null) return [];
+        const item = attachment as Record<string, unknown>;
+        return [item.name, item.filename].filter((name): name is string => typeof name === 'string');
+      });
+      const kinds = [...new Set([
+        ...scanSensitiveData(typeof params.subject === 'string' ? params.subject : ''),
+        ...scanSensitiveData(typeof params.body === 'string' ? params.body : ''),
+        ...attachmentNames.flatMap(scanSensitiveData),
+      ])];
+      if (kinds.length > 0) {
+        add('sensitive_content_in_email', `Sensitive data detected: ${kinds.join(', ')}`, 25);
+        if (external.length > 0) add('sensitive_external_email', `Sensitive data sent to an external recipient: ${kinds.join(', ')}`, 15);
+      }
       break;
     }
     case 'delete_file': {
@@ -105,11 +121,14 @@ export function scoreRules(toolName: string, params: Record<string, unknown>, ct
     }
     case 'run_db_query': {
       const query = typeof params.query === 'string' ? params.query : '';
-      if (DESTRUCTIVE_SQL.test(query)) {
+      const analysis = analyzeSql(query);
+      if (!analysis) {
+        add('sql_analysis_uncertain', 'SQL could not be safely analyzed', 40);
+      } else if (analysis.statements.some((statement) => statement.destructive)) {
         category = 'destructive';
         add('destructive_query', 'Query modifies or destroys data', 30);
-        if (MUTATING_SQL.test(query) && !/\bwhere\b/i.test(query)) add('unbounded_mutation', 'DELETE/UPDATE without a WHERE clause affects every row', 20);
-        if (IRREVERSIBLE_DDL.test(query)) add('irreversible_ddl', 'DROP/TRUNCATE cannot be undone', 20);
+        if (analysis.statements.some((statement) => statement.unboundedMutation)) add('unbounded_mutation', 'Mutation without a WHERE clause affects every row', 20);
+        if (analysis.statements.some((statement) => statement.irreversibleDdl)) add('irreversible_ddl', 'DROP/TRUNCATE cannot be undone', 20);
       }
       if (SENSITIVE_TABLE.test(query)) add('sensitive_target', 'Query touches a sensitive table', 15);
       break;

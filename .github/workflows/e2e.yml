@@ -1,0 +1,61 @@
+name: E2E
+
+on:
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  playwright:
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:17.6-bookworm
+        env:
+          POSTGRES_DB: agentguard_e2e
+          POSTGRES_USER: postgres
+          POSTGRES_PASSWORD: e2e-postgres-password
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U postgres -d agentguard_e2e"
+          --health-interval 5s
+          --health-timeout 3s
+          --health-retries 20
+    env:
+      DATABASE_ADMIN_URL: postgres://postgres:e2e-postgres-password@127.0.0.1:5432/agentguard_e2e
+      DATABASE_URL: postgres://agentguard_app:e2e-app-password@127.0.0.1:5432/agentguard_e2e
+      OPA_URL: http://127.0.0.1:8181
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: 24
+          cache: npm
+      - run: npm ci
+      - run: npm run opa:install
+      - name: Start OPA
+        run: |
+          nohup tools/bin/opa run --server --addr 127.0.0.1:8181 policies >/tmp/opa.log 2>&1 &
+          for attempt in {1..30}; do
+            if curl --fail --silent http://127.0.0.1:8181/health >/dev/null; then exit 0; fi
+            sleep 1
+          done
+          cat /tmp/opa.log
+          exit 1
+      - run: npx playwright install --with-deps chromium
+      - run: npm run test:e2e
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        if: failure()
+        with:
+          name: playwright-report-and-traces
+          path: |
+            playwright-report/
+            test-results/
+          if-no-files-found: ignore
