@@ -4,11 +4,13 @@ import type { RiskAssessment } from '../scoring/riskScoring.js';
 import { assessRisk } from '../scoring/riskScoring.js';
 import type { PolicyDecision, PolicyResult } from '../policy/policyClient.js';
 import { buildPolicyInput } from '../policy/policyClient.js';
+import type { AgentPolicy } from '../policy/policyClient.js';
 import type { ExecutionResult } from '../tools/mockTools.js';
 import { executeMockTool, notExecuted } from '../tools/mockTools.js';
 import type { ApprovalStatus } from '../approvals/approvals.js';
 import { waitForResolution } from '../approvals/approvals.js';
 import { errorFields } from '../logger.js';
+import { classifierStatus, finalScore, metricToolName, ruleScore, toolCalls } from '../metrics.js';
 
 /**
  * Interceptor (TRD §5): the only path from "agent proposed a tool call" to "mock tool ran".
@@ -118,6 +120,10 @@ async function decide(ctx: AppContext, req: ToolCallRequest, callId: string, rec
     [req.agent.id, req.toolName, req.params, callId],
   );
   const duplicatePendingCallId = dup.rows[0]?.id ?? null;
+  const storedPolicy = await ctx.db.query<AgentPolicy>(
+    'SELECT allowed_tools, max_payment_amount, allowed_email_domains, max_calls_per_minute FROM agent_policies WHERE agent_id = $1',
+    [req.agent.id],
+  );
 
   // 2-3. Risk Scoring.
   const risk: RiskAssessment = assessRisk(ctx.classifier, req.toolName, req.params, {
@@ -127,6 +133,10 @@ async function decide(ctx: AppContext, req: ToolCallRequest, callId: string, rec
     internalEmailDomains: ctx.config.internalEmailDomains,
     recentCallCount,
   });
+  const metricTool = metricToolName(req.toolName);
+  ruleScore.observe({ tool: metricTool }, risk.rule_score);
+  finalScore.observe({ tool: metricTool }, risk.final_score);
+  classifierStatus.inc({ status: risk.breakdown.injection.status });
   await withAuditTransaction(ctx.db, async (client) => {
     await client.query(
       'INSERT INTO risk_scores (tool_call_id, rule_score, injection_score, final_score, computed_at) VALUES ($1, $2, $3, $4, $5)',
@@ -160,8 +170,10 @@ async function decide(ctx: AppContext, req: ToolCallRequest, callId: string, rec
     agentName: req.agent.name,
     recentCallCount,
     duplicatePendingCallId,
+    agentPolicy: storedPolicy.rows[0],
   });
   const policy = await ctx.policy.evaluate(policyInput);
+  toolCalls.inc({ decision: policy.decision, tool: metricTool });
   ctx.logger.info('policy decided', { call_id: callId, decision: policy.decision, policy_name: policy.policy_name, source: policy.source });
 
   // 5. Persist decision + act on it, atomically.

@@ -1,5 +1,6 @@
 import type { RiskAssessment } from '../scoring/riskScoring.js';
 import type { Logger } from '../logger.js';
+import { opaFailures, opaLatency } from '../metrics.js';
 
 /**
  * OPA Policy Client (TRD §5). Express never decides allow/block/approve itself: it asks
@@ -25,9 +26,24 @@ export interface PolicyInput {
     local_hour: number;
     recent_call_count: number;
     duplicate_pending_call_id: string | null;
+    agent_policy: AgentPolicy;
   };
   params: Record<string, unknown>;
 }
+
+export interface AgentPolicy {
+  allowed_tools: string[];
+  max_payment_amount: number | null;
+  allowed_email_domains: string[];
+  max_calls_per_minute: number | null;
+}
+
+export const DEFAULT_AGENT_POLICY: AgentPolicy = {
+  allowed_tools: ['send_email', 'delete_file', 'run_db_query', 'process_payment'],
+  max_payment_amount: null,
+  allowed_email_domains: [],
+  max_calls_per_minute: null,
+};
 
 export interface PolicyResult {
   decision: PolicyDecision;
@@ -46,6 +62,7 @@ export function buildPolicyInput(args: {
   agentName: string;
   recentCallCount: number;
   duplicatePendingCallId: string | null;
+  agentPolicy?: AgentPolicy;
 }): PolicyInput {
   const { rules, injection } = args.risk.breakdown;
   return {
@@ -63,6 +80,7 @@ export function buildPolicyInput(args: {
       local_hour: rules.local_hour,
       recent_call_count: args.recentCallCount,
       duplicate_pending_call_id: args.duplicatePendingCallId,
+      agent_policy: args.agentPolicy ?? DEFAULT_AGENT_POLICY,
     },
     params: args.params,
   };
@@ -79,6 +97,7 @@ export function createOpaPolicyClient(opts: { opaUrl: string; timeoutMs: number;
   const decisionUrl = `${opts.opaUrl}/v1/data/agentguard/policy/result`;
 
   const failClosed = (policy_name: string, error: string, started: number): PolicyResult => {
+    opaFailures.inc();
     opts.logger.error('OPA unavailable or invalid response — failing closed (block)', { policy_name, error });
     return {
       decision: 'block',
@@ -93,6 +112,7 @@ export function createOpaPolicyClient(opts: { opaUrl: string; timeoutMs: number;
   return {
     async evaluate(input) {
       const started = Date.now();
+      try {
       let response: Response;
       try {
         response = await fetch(decisionUrl, {
@@ -132,6 +152,9 @@ export function createOpaPolicyClient(opts: { opaUrl: string; timeoutMs: number;
       };
       opts.logger.debug('OPA decision', { decision: decided.decision, policy_name, latency_ms: decided.latency_ms });
       return decided;
+      } finally {
+        opaLatency.observe((Date.now() - started) / 1000);
+      }
     },
     async health() {
       try {

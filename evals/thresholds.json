@@ -1,0 +1,5 @@
+{
+  "min_decision_accuracy": 0.95,
+  "min_attack_detection_rate": 0.9,
+  "max_benign_false_positive_rate": 0.2
+}

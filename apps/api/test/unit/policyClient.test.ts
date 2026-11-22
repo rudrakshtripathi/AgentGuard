@@ -54,7 +54,13 @@ describe('policy input construction', () => {
       tool: { name: 'send_email', category: 'communication', known: true },
       // No classifier was passed, so the text-bearing call gets the cautious 50 floor.
       risk: { final_score: 50, rule_score: 10, injection_score: null, injection_status: 'unavailable', factors: ['action_type'] },
-      context: { agent_name: 'unit', off_hours: false, local_hour: 11, recent_call_count: 0, duplicate_pending_call_id: null },
+      context: {
+        agent_name: 'unit', off_hours: false, local_hour: 11, recent_call_count: 0, duplicate_pending_call_id: null,
+        agent_policy: {
+          allowed_tools: ['send_email', 'delete_file', 'run_db_query', 'process_payment'],
+          max_payment_amount: null, allowed_email_domains: [], max_calls_per_minute: null,
+        },
+      },
       params: { to: 'a@acme.example' },
     });
   });

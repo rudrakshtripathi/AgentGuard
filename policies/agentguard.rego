@@ -29,9 +29,78 @@ valid_input if {
 	input.risk.final_score <= 100
 	is_string(input.tool.name)
 	is_string(input.tool.category)
+	valid_agent_policy
 }
 
+valid_agent_policy if {
+	is_array(input.context.agent_policy.allowed_tools)
+	is_array(input.context.agent_policy.allowed_email_domains)
+	every value in input.context.agent_policy.allowed_tools { is_string(value) }
+	every domain in input.context.agent_policy.allowed_email_domains { is_string(domain) }
+	optional_number(input.context.agent_policy.max_payment_amount)
+	optional_number(input.context.agent_policy.max_calls_per_minute)
+}
+
+optional_number(value) if value == null
+optional_number(value) if is_number(value)
+
+allowed_tool if {
+	some name in input.context.agent_policy.allowed_tools
+	name == input.tool.name
+}
+
+domain_allowed(domain) if {
+	some allowed in input.context.agent_policy.allowed_email_domains
+	lower(allowed) == domain
+}
+
+recipient_list(value) := [value] if is_string(value)
+
+else := [item | some item in value; is_string(item)] if is_array(value)
+
+else := []
+
+email_recipients := array.concat(
+	array.concat(recipient_list(object.get(input.params, "to", null)), recipient_list(object.get(input.params, "cc", null))),
+	recipient_list(object.get(input.params, "bcc", null)),
+)
+
 # ------------------------------------------------------------------ block rules
+
+block contains rule if {
+	valid_input
+	not allowed_tool
+	rule := {"name": "block_agent_tool_not_allowed", "reason": "This tool is not allowed by the agent's policy."}
+}
+
+block contains rule if {
+	valid_input
+	input.tool.name == "process_payment"
+	is_number(input.context.agent_policy.max_payment_amount)
+	is_number(input.params.amount)
+	input.params.amount > input.context.agent_policy.max_payment_amount
+	rule := {"name": "block_agent_payment_cap", "reason": "Payment exceeds this agent's configured limit."}
+}
+
+block contains rule if {
+	valid_input
+	is_number(input.context.agent_policy.max_calls_per_minute)
+	input.context.recent_call_count >= input.context.agent_policy.max_calls_per_minute
+	rule := {"name": "block_agent_rate_limit", "reason": "This agent has reached its configured call limit."}
+}
+
+block contains rule if {
+	valid_input
+	input.tool.name == "send_email"
+	some recipient in email_recipients
+	some address in split(replace(recipient, ";", ","), ",")
+	parts := split(trim(address, " <>"), "@")
+	count(parts) == 2
+	domain := lower(parts[1])
+	count(input.context.agent_policy.allowed_email_domains) > 0
+	not domain_allowed(domain)
+	rule := {"name": "block_agent_email_domain", "reason": "Email recipient domain is not allowed by this agent's policy."}
+}
 
 block contains rule if {
 	not valid_input

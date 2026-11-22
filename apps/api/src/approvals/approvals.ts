@@ -4,6 +4,7 @@ import { appendAudit, withAuditTransaction } from '../audit/auditLog.js';
 import { AppError } from '../http/errors.js';
 import type { ExecutionResult } from '../tools/mockTools.js';
 import { executeMockTool, notExecuted } from '../tools/mockTools.js';
+import { approvalWait } from '../metrics.js';
 
 /**
  * Human-in-the-loop approval workflow (FR-006/007/008, Implementation Plan §3.5).
@@ -194,6 +195,7 @@ export interface WaitOutcome {
  */
 export async function waitForResolution(ctx: AppContext, approvalId: string, toolCallId: string): Promise<WaitOutcome> {
   const { approvalPollIntervalMs: interval, approvalTimeoutMs: timeout } = ctx.config;
+  const started = Date.now();
   const deadline = Date.now() + timeout + 5 * interval + 2000;
   for (;;) {
     const r = await ctx.db.query<{ status: ApprovalStatus; reviewer_username: string | null }>(
@@ -202,6 +204,7 @@ export async function waitForResolution(ctx: AppContext, approvalId: string, too
     );
     const row = r.rows[0];
     if (row && row.status !== 'pending') {
+      approvalWait.observe({ status: row.status }, (Date.now() - started) / 1000);
       const exec = await ctx.db.query<{ payload_json: ExecutionResult }>(
         `SELECT payload_json FROM audit_log
           WHERE referenced_call_id = $1 AND event_type IN ('tool_executed', 'tool_not_executed')

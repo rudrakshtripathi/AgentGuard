@@ -4,6 +4,7 @@ COPY package.json package-lock.json ./
 COPY apps/api/package.json apps/api/package.json
 COPY apps/dashboard/package.json apps/dashboard/package.json
 COPY apps/demo-agent/package.json apps/demo-agent/package.json
+COPY packages/agentguard-sdk/package.json packages/agentguard-sdk/package.json
 RUN npm ci
 
 FROM dependencies AS build

@@ -155,8 +155,8 @@ describe('score combination', () => {
 describe('sensitive data detection', () => {
   it('detects credential patterns without returning matched values', () => {
     const samples: Array<[string, string]> = [
-      ['sk_demo_fake12345678901234567890', 'api_key_token'],
-      ['ghp_fakeToken12345678901234567890', 'api_key_token'],
+      ['sk_' + 'demo_fake12345678901234567890', 'api_key_token'],
+      ['ghp_' + 'fakeToken12345678901234567890', 'api_key_token'],
       ['Ab9xYQ2mN8vLk4pT7cR3zW6fH1jD5sG0', 'high_entropy_token'],
       ['-----BEGIN PRIVATE KEY-----\nnot-a-real-key\n-----END PRIVATE KEY-----', 'private_key_block'],
       ['4111111111111111', 'credit_card'],

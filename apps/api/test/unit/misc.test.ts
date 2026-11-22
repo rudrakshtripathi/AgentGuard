@@ -76,4 +76,18 @@ describe('configuration', () => {
     const c = loadConfig({ DATABASE_URL: 'postgres://x' });
     expect(c).toMatchObject({ opaUrl: 'http://127.0.0.1:8181', apiPort: 4000, approvalTimeoutMs: 120_000, cookieSecure: false });
   });
+  it('uses the platform port and configured proxy hops', () => {
+    expect(loadConfig({ DATABASE_URL: 'postgres://x', PORT: '10000', TRUST_PROXY_HOPS: '1' }))
+      .toMatchObject({ apiPort: 10000, trustProxyHops: 1 });
+  });
+});
+
+describe('database pooler credentials', () => {
+  it('uses the role portion of Supabase shared-pooler usernames', async () => {
+    const { credentials } = await import('../../src/db/migrate.js');
+    expect(credentials('postgres://agentguard_app.projectref:pw@aws-0-region.pooler.supabase.com:5432/postgres'))
+      .toEqual({ user: 'agentguard_app', password: 'pw' });
+    expect(credentials('postgres://agentguard_app:pw@localhost:5432/db'))
+      .toEqual({ user: 'agentguard_app', password: 'pw' });
+  });
 });

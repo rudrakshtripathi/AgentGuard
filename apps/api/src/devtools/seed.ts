@@ -47,6 +47,21 @@ export async function seedIdentities(ctx: AppContext, opts: SeedOptions) {
   // Internal agents get random keys that are never revealed (they cannot call the API).
   await upsertAgent(DEMO_AGENT_NAME, sha256(`ag_${randomBytes(24).toString('base64url')}`), false);
   await upsertAgent('reporting-bot', sha256(`ag_${randomBytes(24).toString('base64url')}`), false);
+  const policyRows = [
+    { name: DEMO_API_AGENT_NAME, cap: 75_000, domains: ['acme.example', 'globex.example'], calls: 90 },
+    { name: 'reporting-bot', cap: 50_000, domains: ['acme.example', 'globex.example', 'contoso.example'], calls: 75 },
+    { name: DEMO_AGENT_NAME, cap: null, domains: [], calls: null },
+  ];
+  for (const row of policyRows) {
+    await ctx.db.query(
+      `INSERT INTO agent_policies (agent_id, allowed_tools, max_payment_amount, allowed_email_domains, max_calls_per_minute)
+       VALUES ($1, ARRAY['send_email', 'delete_file', 'run_db_query', 'process_payment', 'archive_records'], $2, $3, $4)
+       ON CONFLICT (agent_id) DO UPDATE SET allowed_tools = EXCLUDED.allowed_tools,
+         max_payment_amount = EXCLUDED.max_payment_amount, allowed_email_domains = EXCLUDED.allowed_email_domains,
+         max_calls_per_minute = EXCLUDED.max_calls_per_minute`,
+      [agents[row.name]!.id, row.cap, row.domains, row.calls],
+    );
+  }
   return { admin: admin.rows[0]!, agents };
 }
 

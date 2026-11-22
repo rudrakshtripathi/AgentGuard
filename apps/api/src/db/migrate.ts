@@ -6,8 +6,8 @@ import { repoRoot } from '../config.js';
 export const migrationsDir = resolve(repoRoot, 'db', 'migrations');
 
 /** Tables the application role may read. */
-const APP_TABLES = ['agents', 'admins', 'admin_sessions', 'tool_calls', 'risk_scores', 'policy_decisions', 'approvals', 'audit_log'];
-/** Tables the application role may INSERT into (agents/admins are provisioned by the seed only). */
+const APP_TABLES = ['agents', 'agent_policies', 'admins', 'admin_sessions', 'tool_calls', 'risk_scores', 'policy_decisions', 'approvals', 'audit_log'];
+/** Tables the application role may INSERT into (agents/admins/policies are provisioned by the seed only). */
 const APP_INSERT_TABLES = ['admin_sessions', 'tool_calls', 'risk_scores', 'policy_decisions', 'approvals', 'audit_log'];
 
 export interface MigrateResult {
@@ -15,9 +15,12 @@ export interface MigrateResult {
   appRole: { name: string; privileged: boolean } | null;
 }
 
-function credentials(url: string) {
+export function credentials(url: string) {
   const u = new URL(url);
-  return { user: decodeURIComponent(u.username), password: decodeURIComponent(u.password) };
+  let user = decodeURIComponent(u.username);
+  // Supabase's shared pooler authenticates as role.project-ref; Postgres roles omit that suffix.
+  if (u.hostname.endsWith('.pooler.supabase.com')) user = user.slice(0, user.lastIndexOf('.'));
+  return { user, password: decodeURIComponent(u.password) };
 }
 
 /**

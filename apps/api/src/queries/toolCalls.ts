@@ -94,7 +94,7 @@ export async function listCalls(db: Queryable, q: ListCallsQuery) {
 export interface CallDetail extends CallSummary {
   pipeline_state: 'in_progress' | 'awaiting_approval' | 'complete';
   risk: { rule_score: number; injection_score: number | null; final_score: number; computed_at: string; breakdown: unknown } | null;
-  policy: { decision: string; policy_name: string; decided_at: string; reasons: string[]; source: string | null } | null;
+  policy: { decision: string; policy_name: string; decided_at: string; reasons: string[]; source: string | null; agent_policy: unknown } | null;
   approval: {
     id: string;
     status: string;
@@ -147,6 +147,7 @@ export async function getCallDetail(db: Queryable, id: string, approvalTimeoutMs
             decided_at: iso(row.decided_at)!,
             reasons: (decided?.payload_json.reasons as string[] | undefined) ?? [],
             source: (decided?.payload_json.source as string | undefined) ?? null,
+            agent_policy: (decided?.payload_json.policy_input as { context?: { agent_policy?: unknown } } | undefined)?.context?.agent_policy ?? null,
           },
     approval: summary.approval_id
       ? {

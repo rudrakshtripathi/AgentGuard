@@ -3,8 +3,10 @@ import { afterEach, describe, expect, it } from 'vitest';
 import { verifyAuditLog } from '../../src/audit/auditLog.js';
 import { createOpaPolicyClient } from '../../src/policy/policyClient.js';
 import { createLogger } from '../../src/logger.js';
+import { startApprovalSweeper, sweepExpiredApprovals } from '../../src/approvals/approvals.js';
+import { processToolCall } from '../../src/interceptor/pipeline.js';
 import type { Harness } from './harness.js';
-import { APPROVAL_TIMEOUT_MS, auditEvents, createHarness, csrf, sleep, submit } from './harness.js';
+import { AGENT_KEY, APPROVAL_TIMEOUT_MS, auditEvents, createHarness, csrf, sleep, submit } from './harness.js';
 
 let h: Harness;
 afterEach(async () => h?.close());
@@ -40,6 +42,25 @@ describe('interception pipeline: agent -> scoring -> OPA -> DB -> audit -> mock 
     expect((await verifyAuditLog(h.ctx.db)).valid).toBe(true);
   });
 
+  it('protects metrics from agent keys and admin sessions, and exposes no call parameters as labels', async () => {
+    h = await createHarness();
+    await request(h.app).get('/metrics').set('Cookie', h.cookie).expect(401);
+    await request(h.app).get('/metrics').set('Authorization', `Bearer ${AGENT_KEY}`).expect(401);
+    const secretLikeParam = 'Routine status update';
+    const call = await submit(h, {
+      tool_name: 'run_db_query',
+      params: { query: `SELECT 1 -- ${secretLikeParam}` },
+    }).expect(200);
+    expect(call.body.decision).toBe('allow');
+    const metrics = await request(h.app).get('/metrics').set('Authorization', 'Bearer integration-metrics-token').expect(200);
+    expect(metrics.text).toMatch(/agentguard_tool_calls_total\{decision="allow",tool="run_db_query"\} [1-9]/);
+    expect(metrics.text).toContain('agentguard_rule_score');
+    expect(metrics.text).toContain('agentguard_final_score');
+    expect(metrics.text).toContain('agentguard_classifier_status_total');
+    expect(metrics.text).not.toContain(secretLikeParam);
+    expect(metrics.text).not.toContain('metrics@example.invalid');
+  });
+
   it('BLOCK: prompt injection is blocked by OPA and the tool never executes', async () => {
     h = await createHarness();
     const res = await submit(h, {
@@ -52,6 +73,52 @@ describe('interception pipeline: agent -> scoring -> OPA -> DB -> audit -> mock 
     const s = await dbState(h, res.body.call_id);
     expect(s.risk.injection_score).toBeGreaterThanOrEqual(80);
     expect(s.events).toEqual(['call_received', 'score_computed', 'decision_made', 'tool_not_executed']);
+  });
+
+  it('applies distinct agent policy limits to the same payment and audits the values used', async () => {
+    h = await createHarness();
+    const agents = (await h.adminDb.query<{ id: string; name: string }>(
+      "SELECT id, name FROM agents WHERE name IN ('demo-agent', 'reporting-bot') ORDER BY name",
+    )).rows;
+    const outcomes = await Promise.all(agents.map((agent) => processToolCall(h.ctx, {
+      agent,
+      toolName: 'process_payment',
+      params: { recipient: 'same-vendor', amount: 60_000 },
+      clientRequestedAt: null,
+      waitForApproval: false,
+    })));
+    const demoIndex = agents.findIndex((a) => a.name === 'demo-agent');
+    const reportingIndex = agents.findIndex((a) => a.name === 'reporting-bot');
+    expect(outcomes[demoIndex]!.policy_decision).toBe('approve');
+    expect(outcomes[reportingIndex]!.policy_decision).toBe('block');
+    const inputs = await h.adminDb.query<{ payload_json: { policy_input: { context: { agent_policy: { max_payment_amount: number } } } } }>(
+      "SELECT payload_json FROM audit_log WHERE event_type = 'decision_made' ORDER BY seq DESC LIMIT 2",
+    );
+    expect(inputs.rows.map((r) => r.payload_json.policy_input.context.agent_policy.max_payment_amount).sort((a, b) => a - b))
+      .toEqual([50_000, 75_000]);
+  });
+
+  it('applies distinct agent policy limits to the same payment and audits the values used', async () => {
+    h = await createHarness();
+    const agents = (await h.adminDb.query<{ id: string; name: string }>(
+      "SELECT id, name FROM agents WHERE name IN ('demo-agent', 'reporting-bot') ORDER BY name",
+    )).rows;
+    const outcomes = await Promise.all(agents.map((agent) => processToolCall(h.ctx, {
+      agent,
+      toolName: 'process_payment',
+      params: { recipient: 'same-vendor', amount: 60_000 },
+      clientRequestedAt: null,
+      waitForApproval: false,
+    })));
+    const demoIndex = agents.findIndex((a) => a.name === 'demo-agent');
+    const reportingIndex = agents.findIndex((a) => a.name === 'reporting-bot');
+    expect(outcomes[demoIndex]!.policy_decision).toBe('approve');
+    expect(outcomes[reportingIndex]!.policy_decision).toBe('block');
+    const inputs = await h.adminDb.query<{ payload_json: { policy_input: { context: { agent_policy: { max_payment_amount: number } } } } }>(
+      "SELECT payload_json FROM audit_log WHERE event_type = 'decision_made' ORDER BY seq DESC LIMIT 2",
+    );
+    expect(inputs.rows.map((r) => r.payload_json.policy_input.context.agent_policy.max_payment_amount).sort((a, b) => a - b))
+      .toEqual([50_000, 75_000]);
   });
 
   it('APPROVE -> approved: bulk delete waits for a human, then the mock tool executes exactly once', async () => {
@@ -103,6 +170,28 @@ describe('interception pipeline: agent -> scoring -> OPA -> DB -> audit -> mock 
     expect(s.approval.reviewer_id).toBeNull();
     expect(s.events.slice(-2)).toEqual(['approval_resolved', 'tool_not_executed']);
     expect(s.events).not.toContain('tool_executed');
+  });
+
+  it('startup sweeper denies an expired pending approval once after a restart', async () => {
+    h = await createHarness();
+    const res = await submit(h, { tool_name: 'delete_file', params: { path: '/srv/tmp/*', recursive: true } }).expect(202);
+    await sleep(APPROVAL_TIMEOUT_MS + 200);
+    const stop = startApprovalSweeper(h.ctx);
+    try {
+      let status: string | undefined;
+      for (let i = 0; i < 30 && status !== 'timeout_denied'; i++) {
+        await sleep(100);
+        status = (await h.adminDb.query('SELECT status FROM approvals WHERE id = $1', [res.body.approval.id])).rows[0]?.status;
+      }
+      expect(status).toBe('timeout_denied');
+      expect(await sweepExpiredApprovals(h.ctx)).toBe(0);
+      const events = await auditEvents(h, res.body.call_id);
+      expect(events.filter((e) => e === 'approval_resolved')).toHaveLength(1);
+      expect(events.filter((e) => e === 'tool_not_executed')).toHaveLength(1);
+      expect(events).not.toContain('tool_executed');
+    } finally {
+      stop();
+    }
   });
 
   it('wait_for_approval=true holds the request until a human approves (pipeline genuinely pauses)', async () => {
@@ -157,13 +246,12 @@ describe('interception pipeline: agent -> scoring -> OPA -> DB -> audit -> mock 
     expect((await h.adminDb.query('SELECT count(*)::int AS n FROM approvals')).rows[0].n).toBe(1);
   });
 
-  it('unknown tools are scored conservatively and routed to a human, never auto-allowed', async () => {
+  it('unknown tools outside the agent allow-list are blocked', async () => {
     h = await createHarness();
-    const res = await submit(h, { tool_name: 'launch_rockets', params: { target: 'moon' } }).expect(202);
+    const res = await submit(h, { tool_name: 'launch_rockets', params: { target: 'moon' } }).expect(200);
     expect(res.body.risk.rule_score).toBe(40);
-    expect(res.body.policy_name).toContain('approve_unknown_tool');
-    const decided = await request(h.app).post(`/api/approvals/${res.body.approval.id}/decide`).set('Cookie', h.cookie).set(csrf).send({ decision: 'approve' }).expect(200);
-    expect(decided.body.execution.executed).toBe(false); // no sandboxed implementation exists
+    expect(res.body.policy_name).toContain('block_agent_tool_not_allowed');
+    expect(res.body.decision).toBe('block');
   });
 
   it('non-text params skip classification: injection_score stored as NULL, not 0', async () => {

@@ -11,6 +11,7 @@ export async function dropAll(adminUrl: string): Promise<void> {
   try {
     await client.query(`
       DROP TABLE IF EXISTS audit_log, approvals, policy_decisions, risk_scores, tool_calls,
+                           agent_policies,
                            admin_sessions, admins, agents, schema_migrations CASCADE;
       DROP TYPE IF EXISTS decision_enum, approval_status_enum CASCADE;
       DROP FUNCTION IF EXISTS reject_audit_log_mutation() CASCADE;
@@ -28,7 +29,7 @@ export async function truncateAll(adminUrl: string): Promise<void> {
   await client.connect();
   try {
     await client.query(
-      'TRUNCATE audit_log, approvals, policy_decisions, risk_scores, tool_calls, admin_sessions, admins, agents CASCADE',
+      'TRUNCATE audit_log, approvals, policy_decisions, risk_scores, tool_calls, admin_sessions, admins, agents, agent_policies CASCADE',
     );
   } finally {
     await client.end();

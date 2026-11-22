@@ -3,10 +3,14 @@
 import { createPool } from '../db/pool.js';
 import { verifyAuditLog } from '../audit/auditLog.js';
 import { config, fail } from './common.js';
+import { loadAuditAnchors } from '../audit/anchors.js';
 
+const anchorsIndex = process.argv.indexOf('--anchors');
+if (anchorsIndex !== -1 && !process.argv[anchorsIndex + 1]) fail(new Error('--anchors requires a file path or URL.'));
 const db = createPool(config().databaseUrl, 1);
 try {
-  const r = await verifyAuditLog(db);
+  const anchors = anchorsIndex === -1 ? [] : await loadAuditAnchors(process.argv[anchorsIndex + 1]!);
+  const r = await verifyAuditLog(db, anchors);
   console.log(JSON.stringify(r, null, 2));
   console.log(r.valid ? `PASS — ${r.message}` : `FAIL — ${r.message}`);
   process.exitCode = r.valid ? 0 : 2;

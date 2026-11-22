@@ -58,7 +58,14 @@ export interface CallDetail extends CallSummary {
       injection: { injection_score: number | null; status: 'scored' | 'skipped' | 'unavailable'; detail: string };
     } | null;
   } | null;
-  policy: { decision: string; policy_name: string; decided_at: string; reasons: string[]; source: string | null } | null;
+  policy: {
+    decision: string;
+    policy_name: string;
+    decided_at: string;
+    reasons: string[];
+    source: string | null;
+    agent_policy: { allowed_tools: string[]; max_payment_amount: number | null; allowed_email_domains: string[]; max_calls_per_minute: number | null } | null;
+  } | null;
   approval: { id: string; status: string; created_at: string; expires_at: string; resolved_at: string | null; reviewer_username: string | null } | null;
   execution: { executed: boolean; tool: string; result?: unknown; reason?: string; recorded_at: string } | null;
   audit_events: AuditRow[];

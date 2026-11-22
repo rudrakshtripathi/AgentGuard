@@ -1,0 +1,53 @@
+name: Publish audit head anchor
+
+on:
+  schedule:
+    - cron: "17 * * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: audit-anchor
+  cancel-in-progress: false
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+        with:
+          fetch-depth: 0
+      - name: Read current API audit head
+        id: anchor
+        env:
+          ANCHOR_URL: ${{ secrets.ANCHOR_URL }}
+          ANCHOR_TOKEN: ${{ secrets.ANCHOR_TOKEN }}
+        run: |
+          test -n "$ANCHOR_URL" && test -n "$ANCHOR_TOKEN"
+          response="$(curl --fail --silent --show-error -H "Authorization: Bearer $ANCHOR_TOKEN" "$ANCHOR_URL")"
+          seq="$(node -e 'const d=JSON.parse(process.argv[1]); if(!Number.isSafeInteger(d.seq)||d.seq<1) process.exit(1); process.stdout.write(String(d.seq))' "$response")"
+          hash="$(node -e 'const d=JSON.parse(process.argv[1]); if(!/^[a-f0-9]{64}$/i.test(d.hash)) process.exit(1); process.stdout.write(d.hash.toLowerCase())' "$response")"
+          printf 'seq=%s\nhash=%s\n' "$seq" "$hash" >> "$GITHUB_OUTPUT"
+      - name: Append anchor to dedicated branch
+        env:
+          ANCHOR_SEQ: ${{ steps.anchor.outputs.seq }}
+          ANCHOR_HASH: ${{ steps.anchor.outputs.hash }}
+        run: |
+          if git ls-remote --exit-code --heads origin audit-anchors >/dev/null 2>&1; then
+            git fetch origin audit-anchors:audit-anchors
+            git switch audit-anchors
+          else
+            git switch --orphan audit-anchors
+            git rm -rf .
+            mkdir -p docs
+            : > docs/anchors.log
+          fi
+          timestamp="$(date -u +%Y-%m-%dT%H:%M:%SZ)"
+          printf '{"timestamp":"%s","seq":%s,"hash":"%s"}\n' "$timestamp" "$ANCHOR_SEQ" "$ANCHOR_HASH" >> docs/anchors.log
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add docs/anchors.log
+          git commit -m "Publish audit anchor at seq $ANCHOR_SEQ"
+          git push origin audit-anchors

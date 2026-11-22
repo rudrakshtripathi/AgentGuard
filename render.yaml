@@ -1,0 +1,25 @@
+services:
+  - type: web
+    name: agentguard-api
+    runtime: docker
+    plan: free
+    dockerfilePath: ./apps/api/Dockerfile
+    dockerContext: .
+    healthCheckPath: /health
+    envVars:
+      - key: DATABASE_URL
+        sync: false
+      - key: METRICS_TOKEN
+        sync: false
+      - key: SENTRY_DSN
+        sync: false
+      - key: ANCHOR_TOKEN
+        sync: false
+      - key: API_HOST
+        value: 0.0.0.0
+      - key: TRUST_PROXY_HOPS
+        value: "1"
+      - key: COOKIE_SECURE
+        value: "true"
+      - key: LOG_LEVEL
+        value: info

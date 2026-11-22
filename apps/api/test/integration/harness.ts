@@ -49,6 +49,8 @@ export async function createHarness(opts: HarnessOptions = {}): Promise<Harness>
       DATABASE_ADMIN_URL: urls.admin,
       OPA_URL: opaUrl,
       LOG_LEVEL: 'silent',
+      METRICS_TOKEN: 'integration-metrics-token',
+      ANCHOR_TOKEN: 'integration-anchor-token',
       BUSINESS_TIMEZONE: 'UTC',
       INTERNAL_EMAIL_DOMAINS: 'acme.example',
     }),

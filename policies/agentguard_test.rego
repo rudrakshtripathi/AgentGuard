@@ -15,7 +15,13 @@ mk(category, final, injection, status, ctx) := {
 		"factors": [],
 	},
 	"context": object.union(
-		{"off_hours": false, "local_hour": 11, "agent_name": "test", "recent_call_count": 0, "duplicate_pending_call_id": null},
+		{
+			"off_hours": false, "local_hour": 11, "agent_name": "test", "recent_call_count": 0, "duplicate_pending_call_id": null,
+			"agent_policy": {
+				"allowed_tools": ["send_email", "delete_file", "run_db_query", "process_payment"],
+				"max_payment_amount": null, "allowed_email_domains": [], "max_calls_per_minute": null,
+			},
+		},
 		ctx,
 	),
 	"params": {},
@@ -89,7 +95,8 @@ test_financial_off_hours_high_risk_blocks if {
 }
 
 test_unknown_tool_requires_approval if {
-	r := policy.result with input as mk("unknown", 25, null, "skipped", {})
+	ctx := {"agent_policy": {"allowed_tools": ["send_email", "delete_file", "run_db_query", "process_payment", "launch_rockets"], "max_payment_amount": null, "allowed_email_domains": [], "max_calls_per_minute": null}}
+	r := policy.result with input as mk("unknown", 25, null, "skipped", ctx)
 	r.decision == "approve"
 	r.policy_name == "approve_unknown_tool"
 }
@@ -120,6 +127,44 @@ test_block_beats_approve if {
 	r := policy.result with input as mk("destructive", 90, 95, "scored", {})
 	r.decision == "block"
 	r.policy_name == "block_high_risk_score, block_prompt_injection"
+}
+
+test_agent_tool_outside_allow_list_blocks if {
+	ctx := {"agent_policy": {"allowed_tools": ["send_email"], "max_payment_amount": null, "allowed_email_domains": [], "max_calls_per_minute": null}}
+	r := policy.result with input as mk("read", 10, null, "skipped", ctx)
+	r.decision == "block"
+	contains(r.policy_name, "block_agent_tool_not_allowed")
+}
+
+test_agent_payment_above_cap_blocks if {
+	ctx := {"agent_policy": {"allowed_tools": ["send_email", "process_payment"], "max_payment_amount": 500, "allowed_email_domains": [], "max_calls_per_minute": null}}
+	inp := object.union(mk("financial", 10, null, "skipped", ctx), {"params": {"amount": 501}})
+	r := policy.result with input as inp
+	r.decision == "block"
+	contains(r.policy_name, "block_agent_payment_cap")
+}
+
+test_agent_email_domain_outside_allow_list_blocks if {
+	ctx := {"agent_policy": {"allowed_tools": ["send_email"], "max_payment_amount": null, "allowed_email_domains": ["acme.example"], "max_calls_per_minute": null}}
+	inp := object.union(mk("communication", 10, null, "skipped", ctx), {"params": {"to": "user@outside.example"}})
+	r := policy.result with input as inp
+	r.decision == "block"
+	contains(r.policy_name, "block_agent_email_domain")
+}
+
+test_agent_blocks_any_unallowed_address_in_recipient_list if {
+	ctx := {"agent_policy": {"allowed_tools": ["send_email"], "max_payment_amount": null, "allowed_email_domains": ["acme.example"], "max_calls_per_minute": null}}
+	inp := object.union(mk("communication", 10, null, "skipped", ctx), {"params": {"to": "user@acme.example, leak@outside.example"}})
+	r := policy.result with input as inp
+	r.decision == "block"
+	contains(r.policy_name, "block_agent_email_domain")
+}
+
+test_agent_call_limit_blocks_at_limit if {
+	ctx := {"agent_policy": {"allowed_tools": ["send_email"], "max_payment_amount": null, "allowed_email_domains": [], "max_calls_per_minute": 5}, "recent_call_count": 5}
+	r := policy.result with input as mk("communication", 10, null, "skipped", ctx)
+	r.decision == "block"
+	contains(r.policy_name, "block_agent_rate_limit")
 }
 
 # --- fail closed on bad input

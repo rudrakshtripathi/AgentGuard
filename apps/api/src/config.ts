@@ -15,7 +15,9 @@ const envSchema = z.object({
   OPA_URL: z.string().url().default('http://127.0.0.1:8181'),
   OPA_TIMEOUT_MS: z.coerce.number().int().positive().default(1500),
   API_HOST: z.string().default('127.0.0.1'),
-  API_PORT: z.coerce.number().int().positive().default(4000),
+  API_PORT: z.coerce.number().int().positive().optional(),
+  PORT: z.coerce.number().int().positive().optional(),
+  TRUST_PROXY_HOPS: z.coerce.number().int().nonnegative().optional(),
   SESSION_TTL_HOURS: z.coerce.number().positive().default(8),
   COOKIE_SECURE: z
     .enum(['true', 'false'])
@@ -30,6 +32,9 @@ const envSchema = z.object({
   AGENT_RATE_LIMIT_PER_MINUTE: z.coerce.number().int().positive().default(120),
   INJECTION_MODEL_PATH: z.string().default(resolve(apiRoot, 'models', 'injection-model.json')),
   LOG_LEVEL: z.enum(['debug', 'info', 'warn', 'error', 'silent']).default('info'),
+  METRICS_TOKEN: z.string().min(1).optional(),
+  SENTRY_DSN: z.string().url().optional(),
+  ANCHOR_TOKEN: z.string().min(1).optional(),
 });
 
 export interface Config {
@@ -39,6 +44,7 @@ export interface Config {
   opaTimeoutMs: number;
   apiHost: string;
   apiPort: number;
+  trustProxyHops: number | undefined;
   sessionTtlMs: number;
   cookieSecure: boolean;
   approvalTimeoutMs: number;
@@ -48,6 +54,9 @@ export interface Config {
   agentRateLimitPerMinute: number;
   injectionModelPath: string;
   logLevel: 'debug' | 'info' | 'warn' | 'error' | 'silent';
+  metricsToken: string | undefined;
+  sentryDsn: string | undefined;
+  anchorToken: string | undefined;
 }
 
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
@@ -65,7 +74,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     opaUrl: e.OPA_URL.replace(/\/$/, ''),
     opaTimeoutMs: e.OPA_TIMEOUT_MS,
     apiHost: e.API_HOST,
-    apiPort: e.API_PORT,
+    apiPort: e.API_PORT ?? e.PORT ?? 4000,
+    trustProxyHops: e.TRUST_PROXY_HOPS,
     sessionTtlMs: e.SESSION_TTL_HOURS * 3_600_000,
     cookieSecure: e.COOKIE_SECURE,
     approvalTimeoutMs: e.APPROVAL_TIMEOUT_SECONDS * 1000,
@@ -77,5 +87,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     agentRateLimitPerMinute: e.AGENT_RATE_LIMIT_PER_MINUTE,
     injectionModelPath: e.INJECTION_MODEL_PATH,
     logLevel: e.LOG_LEVEL,
+    metricsToken: e.METRICS_TOKEN,
+    sentryDsn: e.SENTRY_DSN,
+    anchorToken: e.ANCHOR_TOKEN,
   };
 }

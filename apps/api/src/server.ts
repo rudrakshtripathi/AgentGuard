@@ -8,9 +8,11 @@ import type { InjectionClassifier } from './scoring/injectionClassifier.js';
 import { createChangeFeed } from './realtime/changeFeed.js';
 import { startApprovalSweeper } from './approvals/approvals.js';
 import type { AppContext } from './context.js';
+import { initializeSentry } from './sentry.js';
 
 const config = loadConfig();
 const logger = createLogger(config.logLevel);
+initializeSentry(config.sentryDsn);
 
 let classifier: InjectionClassifier | null = null;
 let classifierError: string | null = null;

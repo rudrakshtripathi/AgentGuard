@@ -2,6 +2,7 @@ import type { Db, DbClient, Queryable } from '../db/pool.js';
 import { withTransaction } from '../db/pool.js';
 import type { Json, StoredRow, VerifyResult } from './hashChain.js';
 import { computeHash, verifyChain } from './hashChain.js';
+import { auditRows, auditVerifications } from '../metrics.js';
 
 /**
  * Append-only access to the hash-chained audit_log table.
@@ -39,6 +40,12 @@ export interface AuditRow {
   hash: string;
   referenced_call_id: string | null;
   created_at: string;
+}
+
+export interface AuditAnchor {
+  timestamp: string;
+  seq: number;
+  hash: string;
 }
 
 // Arbitrary constant key for the advisory lock that serialises chain appends (FR-009).
@@ -82,6 +89,7 @@ export async function appendAudit(client: DbClient, event: AuditEvent): Promise<
      RETURNING id, seq, event_type, payload_json, prev_hash, hash, referenced_call_id, created_at`,
     [seq, event.event_type, payload, prev_hash, hash, created_at],
   );
+  auditRows.inc();
   return toAuditRow(inserted.rows[0]!);
 }
 
@@ -159,7 +167,7 @@ export async function auditForCall(db: Queryable, callId: string): Promise<Audit
 }
 
 /** Reads the whole chain in order and recomputes every hash (FR-011). Read-only. */
-export async function verifyAuditLog(db: Queryable): Promise<VerifyResult & { checked_at: string }> {
+export async function verifyAuditLog(db: Queryable, anchors: readonly AuditAnchor[] = []): Promise<VerifyResult & { checked_at: string }> {
   const result = await db.query<{
     id: string;
     seq: number;
@@ -178,5 +186,35 @@ export async function verifyAuditLog(db: Queryable): Promise<VerifyResult & { ch
     hash: r.hash,
     created_at: r.created_at.toISOString(),
   }));
-  return { ...verifyChain(rows), checked_at: new Date().toISOString() };
+  let verified = verifyChain(rows);
+  if (verified.valid) {
+    for (const anchor of anchors) {
+      const row = rows.find((candidate) => candidate.seq === anchor.seq);
+      if (!row) {
+        verified = { ...verified, valid: false, status: 'tampered', broken_seq: anchor.seq, reason: 'missing_rows', message: `chain truncated: anchor at seq ${anchor.seq} is no longer present` };
+        break;
+      }
+      if (row.hash !== anchor.hash) {
+        verified = { ...verified, valid: false, status: 'tampered', broken_row_id: row.id, broken_seq: anchor.seq, reason: 'hash_mismatch', message: `chain modified: hash at anchored seq ${anchor.seq} no longer matches` };
+        break;
+      }
+    }
+  }
+  auditVerifications.inc({ result: verified.valid ? 'valid' : 'invalid' });
+  return { ...verified, checked_at: new Date().toISOString() };
+}
+
+export async function getAuditHead(db: Queryable): Promise<{ seq: number | null; hash: string | null; created_at: string | null; total_rows: number }> {
+  const result = await db.query<{ seq: string | null; hash: string | null; created_at: Date | null; total_rows: number }>(
+    `SELECT head.seq, head.hash, head.created_at, totals.total_rows
+       FROM (SELECT seq::text AS seq, hash, created_at FROM audit_log ORDER BY seq DESC LIMIT 1) AS head
+       RIGHT JOIN (SELECT count(*)::int AS total_rows FROM audit_log) AS totals ON true`,
+  );
+  const row = result.rows[0]!;
+  return {
+    seq: row.seq === null ? null : Number(row.seq),
+    hash: row.hash,
+    created_at: row.created_at?.toISOString() ?? null,
+    total_rows: row.total_rows,
+  };
 }

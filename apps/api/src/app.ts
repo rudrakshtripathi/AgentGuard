@@ -3,11 +3,13 @@ import cookieParser from 'cookie-parser';
 import type { AppContext } from './context.js';
 import { adminRoutes, agentRoutes } from './http/routes.js';
 import { errorHandler, notFoundHandler } from './http/errors.js';
+import { timingSafeEqual } from 'node:crypto';
+import { metricsRegistry, pendingApprovals } from './metrics.js';
 
 export function createApp(ctx: AppContext): express.Express {
   const app = express();
   app.disable('x-powered-by');
-  app.set('trust proxy', 'loopback'); // the Next.js dashboard proxies /api/* from localhost
+  app.set('trust proxy', ctx.config.trustProxyHops ?? 'loopback');
   app.set('etag', false);
 
   app.use((req, res, next) => {
@@ -21,6 +23,25 @@ export function createApp(ctx: AppContext): express.Express {
     next();
   });
   app.use(cookieParser());
+
+  if (ctx.config.metricsToken) {
+    app.get('/metrics', async (req, res, next) => {
+      const header = req.get('authorization') ?? '';
+      const supplied = header.startsWith('Bearer ') ? Buffer.from(header.slice(7)) : Buffer.alloc(0);
+      const expected = Buffer.from(ctx.config.metricsToken!);
+      if (supplied.length !== expected.length || !timingSafeEqual(supplied, expected)) {
+        res.status(401).set('www-authenticate', 'Bearer').send('Unauthorized');
+        return;
+      }
+      try {
+        const result = await ctx.db.query<{ n: number }>("SELECT count(*)::int AS n FROM approvals WHERE status = 'pending'");
+        pendingApprovals.set(result.rows[0]!.n);
+        res.set('content-type', metricsRegistry.contentType).send(await metricsRegistry.metrics());
+      } catch (err) {
+        next(err);
+      }
+    });
+  }
 
   // Public health check (TRD §13). Reports dependency status only — never secrets.
   app.get('/health', async (_req, res) => {

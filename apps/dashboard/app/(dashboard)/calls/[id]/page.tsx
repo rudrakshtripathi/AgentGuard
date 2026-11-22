@@ -201,6 +201,16 @@ function Detail() {
                     ))}
                   </ul>
                 </Field>
+                {data.policy.agent_policy && (
+                  <Field label="Agent policy used">
+                    <div className="type-data space-y-1">
+                      <p>Allowed tools: {data.policy.agent_policy.allowed_tools.join(', ') || 'none'}</p>
+                      <p>Payment cap: {data.policy.agent_policy.max_payment_amount === null ? 'none' : data.policy.agent_policy.max_payment_amount}</p>
+                      <p>Allowed email domains: {data.policy.agent_policy.allowed_email_domains.join(', ') || 'all'}</p>
+                      <p>Calls per minute: {data.policy.agent_policy.max_calls_per_minute ?? 'none'}</p>
+                    </div>
+                  </Field>
+                )}
               </dl>
             ) : (
               <p className="text-muted">No decision yet.</p>

@@ -1,6 +1,7 @@
 import type { ErrorRequestHandler, RequestHandler } from 'express';
 import type { Logger } from '../logger.js';
 import { errorFields } from '../logger.js';
+import { reportException } from '../sentry.js';
 
 /** Error with an HTTP status and a stable, machine-readable code (TRD §5). */
 export class AppError extends Error {
@@ -52,6 +53,7 @@ export function errorHandler(logger: Logger): ErrorRequestHandler {
       return;
     }
     logger.error('unhandled error', { method: req.method, path: req.path, ...errorFields(err) });
+    reportException(err);
     if (res.headersSent) return;
     res.status(500).json(errorBody('INTERNAL_ERROR', 'An unexpected error occurred. Check the server logs.'));
   };

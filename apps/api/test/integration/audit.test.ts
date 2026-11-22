@@ -97,6 +97,41 @@ describe('hash-chained audit log', () => {
     expect(r.body.message).toMatch(/Nothing to verify/);
   });
 
+  it('publishes a minimal head-only anchor behind its own bearer token', async () => {
+    h = await createHarness();
+    await recordAudit(h.ctx.db, { event_type: 'demo_scenario_triggered', payload: { private: 'must not be returned' } });
+    const admin = await request(h.app).get('/api/audit-log/head').set('Cookie', h.cookie).expect(200);
+    expect(admin.body.seq).toBeGreaterThan(0);
+    expect(admin.body.total_rows).toBe(admin.body.seq);
+    expect(admin.body.hash).toMatch(/^[a-f0-9]{64}$/);
+    expect(admin.body).toHaveProperty('created_at');
+    await request(h.app).get('/api/audit-log/anchor').set('Cookie', h.cookie).expect(401);
+    const anchor = await request(h.app).get('/api/audit-log/anchor').set('Authorization', 'Bearer integration-anchor-token').expect(200);
+    expect(anchor.body).toEqual({ seq: admin.body.seq, hash: admin.body.hash });
+    expect(JSON.stringify(anchor.body)).not.toContain('private');
+  });
+
+  it('detects newest-row truncation with an anchor and passes when the anchored head exists', async () => {
+    h = await createHarness();
+    await generateActivity(h);
+    const head = (await h.adminDb.query<{ seq: number; hash: string; created_at: Date }>(
+      'SELECT seq::int AS seq, hash, created_at FROM audit_log ORDER BY seq DESC LIMIT 1',
+    )).rows[0]!;
+    const anchor = { seq: head.seq, hash: head.hash, timestamp: head.created_at.toISOString() };
+    expect((await verifyAuditLog(h.ctx.db, [anchor])).valid).toBe(true);
+    const file = backup();
+    await tamper(adminDbUrl, file, 'delete', head.seq);
+    try {
+      expect((await verifyAuditLog(h.ctx.db)).valid).toBe(true);
+      const anchored = await verifyAuditLog(h.ctx.db, [anchor]);
+      expect(anchored.valid).toBe(false);
+      expect(anchored.message).toBe(`chain truncated: anchor at seq ${head.seq} is no longer present`);
+    } finally {
+      await restore(adminDbUrl, file);
+    }
+    expect((await verifyAuditLog(h.ctx.db, [anchor])).valid).toBe(true);
+  });
+
   it('paginates newest-first and can jump to the page holding a given row', async () => {
     h = await createHarness();
     await generateActivity(h);

@@ -9,7 +9,8 @@
   "workspaces": [
     "apps/api",
     "apps/dashboard",
-    "apps/demo-agent"
+    "apps/demo-agent",
+    "packages/agentguard-sdk"
   ],
   "scripts": {
     "setup": "node scripts/setup.mjs",
@@ -35,8 +36,9 @@
     "lint": "eslint .",
     "build": "npm run build --workspaces",
     "test": "npm run test:unit",
-    "test:unit": "npm run test:unit -w @agentguard/api && npm run test -w @agentguard/demo-agent",
+    "test:unit": "npm run test:unit -w @agentguard/api && npm run test -w @agentguard/demo-agent && npm run test -w @agentguard/sdk",
     "test:integration": "npm run test:integration -w @agentguard/api",
+    "eval": "npm run eval -w @agentguard/api",
     "test:e2e": "node scripts/e2e.mjs",
     "health": "node scripts/health.mjs",
     "verify": "node scripts/verify.mjs"

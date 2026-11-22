@@ -20,6 +20,8 @@ import {
   uuidParam,
 } from './validation.js';
 import { errorFields } from '../logger.js';
+import { timingSafeEqual } from 'node:crypto';
+import { getAuditHead } from '../audit/auditLog.js';
 
 const BODY_LIMIT = '64kb';
 
@@ -170,6 +172,25 @@ export function adminRoutes(ctx: AppContext): Router {
     res.json(await listAudit(ctx.db, { page: q.page, pageSize: q.page_size, eventType: q.event_type, callId: q.call_id, focusSeq: q.focus_seq }));
   });
 
+  router.get('/audit-log/head', admin, async (_req, res) => {
+    res.json(await getAuditHead(ctx.db));
+  });
+
+  // Read-only anchor endpoint. It is independent of admin/agent authentication by design.
+  if (ctx.config.anchorToken) {
+    router.get('/audit-log/anchor', async (req, res) => {
+      const header = req.get('authorization') ?? '';
+      const supplied = header.startsWith('Bearer ') ? Buffer.from(header.slice(7)) : Buffer.alloc(0);
+      const expected = Buffer.from(ctx.config.anchorToken!);
+      if (supplied.length !== expected.length || !timingSafeEqual(supplied, expected)) {
+        res.status(401).set('www-authenticate', 'Bearer').json(errorBody('UNAUTHORIZED', 'A valid anchor token is required.'));
+        return;
+      }
+      const head = await getAuditHead(ctx.db);
+      res.json({ seq: head.seq, hash: head.hash });
+    });
+  }
+
   router.get('/audit-log/verify', admin, async (_req, res) => {
     try {
       const result = await verifyAuditLog(ctx.db);
@@ -211,7 +232,7 @@ export function adminRoutes(ctx: AppContext): Router {
       'x-accel-buffering': 'no',
     });
     res.write('retry: 3000\nevent: ready\ndata: {}\n\n');
-    const heartbeat = setInterval(() => res.write(': ping\n\n'), 15_000);
+    const heartbeat = setInterval(() => res.write('event: heartbeat\ndata: {}\n\n'), 15_000);
     const unsubscribe = feed.subscribe(
       (e) => res.write(`event: change\ndata: ${JSON.stringify(e)}\n\n`),
       () => res.end(),

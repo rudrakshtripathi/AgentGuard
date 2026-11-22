@@ -12,6 +12,7 @@ export type LiveMode = 'connecting' | 'live' | 'polling';
 
 export const POLL_INTERVAL_MS = 2500;
 const RECONNECT_MS = 8000;
+const SSE_TIMEOUT_MS = 35_000;
 
 interface LiveContextValue {
   mode: LiveMode;
@@ -37,33 +38,46 @@ export function LiveProvider({ children }: { children: React.ReactNode }) {
   useEffect(() => {
     let source: EventSource | null = null;
     let reconnect: ReturnType<typeof setTimeout> | null = null;
+    let watchdog: ReturnType<typeof setTimeout> | null = null;
     let closed = false;
+
+    const scheduleReconnect = () => {
+      if (watchdog) clearTimeout(watchdog);
+      watchdog = null;
+      source?.close();
+      source = null;
+      setMode('polling');
+      if (!closed && !reconnect) {
+        reconnect = setTimeout(() => {
+          reconnect = null;
+          connect();
+        }, RECONNECT_MS);
+      }
+    };
+    const armWatchdog = () => {
+      if (watchdog) clearTimeout(watchdog);
+      watchdog = setTimeout(scheduleReconnect, SSE_TIMEOUT_MS);
+    };
 
     const connect = () => {
       if (closed) return;
       source = new EventSource('/api/events');
+      armWatchdog();
       source.addEventListener('ready', () => {
+        armWatchdog();
         setMode('live');
         bump(); // catch up on anything missed while polling
       });
-      source.addEventListener('change', bump);
-      source.onerror = () => {
-        source?.close();
-        source = null;
-        setMode('polling');
-        if (!closed && !reconnect) {
-          reconnect = setTimeout(() => {
-            reconnect = null;
-            connect();
-          }, RECONNECT_MS);
-        }
-      };
+      source.addEventListener('change', () => { armWatchdog(); bump(); });
+      source.addEventListener('heartbeat', armWatchdog);
+      source.onerror = scheduleReconnect;
     };
     connect();
     return () => {
       closed = true;
       source?.close();
       if (reconnect) clearTimeout(reconnect);
+      if (watchdog) clearTimeout(watchdog);
     };
   }, [bump]);
 
